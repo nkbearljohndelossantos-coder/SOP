@@ -1,0 +1,35 @@
+services:
+  sop-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: nkb_sop_app
+    restart: unless-stopped
+    ports:
+      # Strictly bound to local loopback on unused port 4050 to never clash with existing webapps
+      - "127.0.0.1:4050:4000"
+    environment:
+      - NODE_ENV=production
+      - APP_ENV=production
+      - ENABLE_DEMO_ACCOUNTS=false
+      - PORT=4000
+      - CLIENT_URL=https://sop.nkbmanufacturing.com
+      - DATABASE_URL=file:/app/data/sop_prod.db
+      - JWT_SECRET=sop_enterprise_jwt_secret_minimum_32_characters_prod_key_2026
+      - UPLOAD_DIR=/app/uploads
+      - MAX_UPLOAD_SIZE=15728640
+    volumes:
+      - sop_data:/app/data
+      - sop_uploads:/app/uploads
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:4000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+volumes:
+  sop_data:
+    name: nkb_sop_data
+  sop_uploads:
+    name: nkb_sop_uploads

@@ -1,0 +1,304 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id               String       @id @default(cuid())
+  employeeId       String       @unique
+  username         String       @unique
+  email            String       @unique
+  passwordHash     String
+  fullName         String
+  position         String?
+  role             String       @default("READ_ONLY") // SUPER_ADMIN, ADMIN, SOP_CREATOR, DEPARTMENT_HEAD, DEPARTMENT_REPRESENTATIVE, REVIEWER, APPROVER, READ_ONLY
+  isActive         Boolean      @default(true)
+  isDemoUser       Boolean      @default(false)
+  lastLoginAt      DateTime?
+  departmentId     String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  department       Department?  @relation("DepartmentMembers", fields: [departmentId], references: [id])
+  headedDepartment Department?  @relation("DepartmentHead")
+  representativeOf DepartmentRepresentative[]
+  
+  sopsCreated      SOP[]        @relation("SOPCreator")
+  versionsCreated  SOPVersion[] @relation("VersionCreator")
+  versionsFinalized SOPVersion[] @relation("VersionFinalizer")
+  participantDecisions SOPParticipant[]
+  meetingsCreated  SOPReviewMeeting[]
+  remarks          SOPRemark[]
+  approvals        SOPApproval[]
+  attachments      SOPAttachment[]
+  auditLogs        AuditLog[]
+  notifications    Notification[]
+
+  @@map("users")
+}
+
+model Department {
+  id             String       @id @default(cuid())
+  code           String       @unique
+  name           String       @unique
+  description    String?
+  isActive       Boolean      @default(true)
+  headUserId     String?      @unique
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  head           User?        @relation("DepartmentHead", fields: [headUserId], references: [id])
+  members        User[]       @relation("DepartmentMembers")
+  representatives DepartmentRepresentative[]
+  relationshipsFrom DepartmentRelationship[] @relation("FromDept")
+  relationshipsTo   DepartmentRelationship[] @relation("ToDept")
+  sopsOwned      SOP[]        @relation("OwnerDepartment")
+  participants   SOPParticipant[]
+  remarks        SOPRemark[]
+  approvals      SOPApproval[]
+
+  @@map("departments")
+}
+
+model DepartmentRepresentative {
+  id           String     @id @default(cuid())
+  departmentId String
+  userId       String
+  assignedAt   DateTime   @default(now())
+
+  department   Department @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  user         User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([departmentId, userId])
+  @@map("department_representatives")
+}
+
+model DepartmentRelationship {
+  id           String     @id @default(cuid())
+  fromDeptId   String
+  toDeptId     String
+  relationType String     @default("COLLABORATOR") // COLLABORATOR, INSPECTION, DOWNSTREAM
+  createdAt    DateTime   @default(now())
+
+  fromDept     Department @relation("FromDept", fields: [fromDeptId], references: [id], onDelete: Cascade)
+  toDept       Department @relation("ToDept", fields: [toDeptId], references: [id], onDelete: Cascade)
+
+  @@unique([fromDeptId, toDeptId])
+  @@map("department_relationships")
+}
+
+model SOP {
+  id                   String       @id @default(cuid())
+  sopNumber            String       @unique
+  title                String
+  category             String
+  ownerDeptId          String
+  createdById          String
+  currentVersionNumber String       @default("1.0")
+  status               String       @default("DRAFT") // DRAFT, INITIAL_REVIEW, UNDER_REVIEW, DISCUSSION, AGREEMENT_PENDING, DEPARTMENT_APPROVAL, CHANGES_REQUESTED, RETURNED_TO_CREATOR, FINAL_REVIEW, APPROVED, FINALIZED, ARCHIVED
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+
+  ownerDept            Department   @relation("OwnerDepartment", fields: [ownerDeptId], references: [id])
+  createdBy            User         @relation("SOPCreator", fields: [createdById], references: [id])
+  versions             SOPVersion[]
+
+  @@index([status])
+  @@index([ownerDeptId])
+  @@map("sops")
+}
+
+model SOPVersion {
+  id              String         @id @default(cuid())
+  sopId           String
+  versionNumber   String         // e.g. "1.0", "1.1"
+  versionInt      Int            @default(1)
+  status          String         @default("DRAFT")
+  title           String
+  purpose         String
+  scope           String
+  responsibilities String
+  procedure       String
+  relatedForms    String?
+  references      String?
+  effectiveDate   DateTime?
+  reviewDate      DateTime?
+  revisionReason  String?
+  changeSummary   String?
+  isFinalized     Boolean        @default(false)
+  finalizedAt     DateTime?
+  finalizedById   String?
+  lockVersion     Int            @default(1)
+  createdById     String
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  sop             SOP            @relation(fields: [sopId], references: [id], onDelete: Cascade)
+  createdBy       User           @relation("VersionCreator", fields: [createdById], references: [id])
+  finalizedBy     User?          @relation("VersionFinalizer", fields: [finalizedById], references: [id])
+
+  participants    SOPParticipant[]
+  reviewMeetings  SOPReviewMeeting[]
+  remarks         SOPRemark[]
+  approvals       SOPApproval[]
+  attachments     SOPAttachment[]
+
+  @@unique([sopId, versionNumber])
+  @@index([status])
+  @@map("sop_versions")
+}
+
+model SOPParticipant {
+  id                  String             @id @default(cuid())
+  sopVersionId        String
+  departmentId        String
+  participationType   String             @default("CONSULTED") // REQUIRED_APPROVER, REQUIRED_REVIEWER, CONSULTED, NOT_INVOLVED
+  status              String             @default("PENDING")   // PENDING, REVIEWED, AGREED, APPROVED, CHANGES_REQUESTED, NA
+  decisionUserId      String?
+  decisionAt          DateTime?
+  remarks             String?
+  agreementConfirmed  Boolean            @default(false)
+  agreementConfirmedAt DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
+
+  sopVersion          SOPVersion         @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  department          Department         @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+  decisionUser        User?              @relation(fields: [decisionUserId], references: [id])
+
+  @@unique([sopVersionId, departmentId])
+  @@index([participationType])
+  @@index([status])
+  @@map("sop_participants")
+}
+
+model SOPReviewMeeting {
+  id              String        @id @default(cuid())
+  sopVersionId    String
+  meetingDate     DateTime      @default(now())
+  agenda          String
+  concerns        String?
+  recommendations String?
+  summary         String?
+  status          String        @default("SCHEDULED") // SCHEDULED, IN_PROGRESS, CONCLUDED
+  createdById     String
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  sopVersion      SOPVersion    @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  createdBy       User          @relation(fields: [createdById], references: [id])
+
+  @@index([sopVersionId])
+  @@map("sop_review_meetings")
+}
+
+model SOPRemark {
+  id             String        @id @default(cuid())
+  sopVersionId   String
+  departmentId   String
+  userId         String
+  comment        String
+  sectionRef     String?
+  status         String        @default("OPEN") // OPEN, RESOLVED
+  parentId       String?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  sopVersion     SOPVersion    @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  department     Department    @relation(fields: [departmentId], references: [id])
+  user           User          @relation(fields: [userId], references: [id])
+  parent         SOPRemark?    @relation("RemarkReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies        SOPRemark[]   @relation("RemarkReplies")
+
+  @@index([sopVersionId])
+  @@index([departmentId])
+  @@index([status])
+  @@map("sop_remarks")
+}
+
+model SOPApproval {
+  id             String           @id @default(cuid())
+  sopVersionId   String
+  departmentId   String
+  approverUserId String
+  decision       String           // APPROVED, CHANGES_REQUESTED, REJECTED
+  reason         String?          // Required if CHANGES_REQUESTED or REJECTED
+  ipAddress      String?
+  userAgent      String?
+  createdAt      DateTime         @default(now())
+
+  sopVersion     SOPVersion       @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  department     Department       @relation(fields: [departmentId], references: [id])
+  approverUser   User             @relation(fields: [approverUserId], references: [id])
+
+  @@index([sopVersionId])
+  @@index([departmentId])
+  @@map("sop_approvals")
+}
+
+model SOPAttachment {
+  id               String       @id @default(cuid())
+  sopVersionId     String
+  originalFilename String
+  storedFilename   String
+  mimeType         String
+  fileSize         Int
+  uploadedById     String
+  createdAt        DateTime     @default(now())
+
+  sopVersion       SOPVersion   @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  uploadedBy       User         @relation(fields: [uploadedById], references: [id])
+
+  @@index([sopVersionId])
+  @@map("sop_attachments")
+}
+
+model AuditLog {
+  id          String    @id @default(cuid())
+  userId      String?
+  username    String    @default("SYSTEM")
+  action      String
+  entity      String
+  entityId    String
+  oldValue    String?
+  newValue    String?
+  metadata    String?
+  ipAddress   String?
+  createdAt   DateTime  @default(now())
+
+  user        User?     @relation(fields: [userId], references: [id])
+
+  @@index([action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model Notification {
+  id        String    @id @default(cuid())
+  userId    String
+  title     String
+  message   String
+  type      String
+  link      String?
+  isRead    Boolean   @default(false)
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model SystemSetting {
+  key         String    @id
+  value       String
+  description String?
+  updatedAt   DateTime  @updatedAt
+
+  @@map("system_settings")
+}

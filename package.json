@@ -1,0 +1,22 @@
+{
+  "name": "sop-management-system",
+  "version": "1.0.0",
+  "description": "Enterprise-Grade SOP Management & Approval System for NKB Manufacturing Corp.",
+  "scripts": {
+    "install:all": "npm install && npm --prefix server install && npm --prefix client install",
+    "build:server": "npm --prefix server run build",
+    "build:client": "npm --prefix client run build",
+    "build": "npm run build:server && npm run build:client",
+    "test": "npm --prefix server test",
+    "seed:prod": "npm --prefix server run seed:prod",
+    "seed:demo": "npm --prefix server run seed:demo",
+    "reset:prod": "npm --prefix server run reset:prod",
+    "start": "npm --prefix server start",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev"
+  },
+  "keywords": ["sop", "qms", "iso-9001", "workflow", "audit-trail"],
+  "author": "NKB Manufacturing Corp.",
+  "license": "UNLICENSED",
+  "private": true
+}
