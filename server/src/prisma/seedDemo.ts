@@ -131,9 +131,18 @@ export async function seedDemoData() {
   const userMap = new Map<string, string>();
 
   for (const u of demoUsersData) {
+    const existingByEmp = await prisma.user.findUnique({ where: { employeeId: u.employeeId } });
+    if (existingByEmp && existingByEmp.username !== u.username) {
+      await prisma.user.update({
+        where: { id: existingByEmp.id },
+        data: { employeeId: `${existingByEmp.employeeId}_OLD_${Date.now()}` },
+      });
+    }
+
     const user = await prisma.user.upsert({
       where: { username: u.username },
       update: {
+        employeeId: u.employeeId,
         fullName: u.fullName,
         email: u.email,
         role: u.role,

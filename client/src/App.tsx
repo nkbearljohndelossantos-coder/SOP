@@ -5,6 +5,7 @@ import { NotificationProvider } from './context/NotificationContext';
 import { Layout } from './components/layout/Layout';
 import { LoginPage } from './pages/LoginPage';
 import { SetupAdminPage } from './pages/SetupAdminPage';
+import { RegisterPage } from './pages/RegisterPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { SOPListPage } from './pages/SOPListPage';
 import { SOPCreatePage } from './pages/SOPCreatePage';
@@ -48,6 +49,7 @@ export const App: React.FC = () => {
           <Routes>
             <Route path="/login" element={<LoginPage />} />
             <Route path="/setup" element={<SetupAdminPage />} />
+            <Route path="/register" element={<RegisterPage />} />
 
             {/* Standalone print page without sidebar */}
             <Route

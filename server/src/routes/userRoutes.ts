@@ -1,9 +1,12 @@
 import { Router } from 'express';
 import { Permissions } from '../config/rbac';
 import {
+  createRegistrationInvite,
   createUser,
+  deleteRegistrationInvite,
   deleteUser,
   getUser,
+  listRegistrationInvites,
   listUsers,
   toggleUserStatus,
   updateUser,
@@ -15,6 +18,11 @@ import { asyncHandler } from '../utils/asyncHandler';
 const router = Router();
 
 router.use(authenticateToken);
+
+// Registration Invites (Admin only)
+router.get('/invites', requirePermission(Permissions.USERS_MANAGE), asyncHandler(listRegistrationInvites));
+router.post('/invites', requirePermission(Permissions.USERS_MANAGE), asyncHandler(createRegistrationInvite));
+router.delete('/invites/:id', requirePermission(Permissions.USERS_MANAGE), asyncHandler(deleteRegistrationInvite));
 
 // Directory view is accessible to authenticated staff
 router.get('/', asyncHandler(listUsers));

@@ -2,10 +2,12 @@ import { Router } from 'express';
 import {
   demoLogin,
   getDemoAccounts,
+  getInviteInfo,
   getMe,
   getSetupStatus,
   login,
   logout,
+  registerWithInvite,
   setupFirstAdmin,
 } from '../controllers/authController';
 import { authenticateToken } from '../middleware/auth';
@@ -19,6 +21,10 @@ router.get('/me', authenticateToken, asyncHandler(getMe));
 router.get('/setup-status', asyncHandler(getSetupStatus));
 router.get('/config', asyncHandler(getSetupStatus));
 router.post('/setup-admin', asyncHandler(setupFirstAdmin));
+
+// Self-Registration via Invite Link (Public)
+router.get('/invite/:token', asyncHandler(getInviteInfo));
+router.post('/register-with-invite', asyncHandler(registerWithInvite));
 
 // Demo Routes (Hard protected inside controller against production)
 router.get('/demo-accounts', asyncHandler(getDemoAccounts));

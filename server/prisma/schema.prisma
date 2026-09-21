@@ -37,6 +37,8 @@ model User {
   attachments      SOPAttachment[]
   auditLogs        AuditLog[]
   notifications    Notification[]
+  invitesCreated   RegistrationInvite[] @relation("InviteCreator")
+  inviteUsed       RegistrationInvite?  @relation("InviteUser")
 
   @@map("users")
 }
@@ -60,6 +62,7 @@ model Department {
   participants   SOPParticipant[]
   remarks        SOPRemark[]
   approvals      SOPApproval[]
+  invites        RegistrationInvite[]
 
   @@map("departments")
 }
@@ -302,3 +305,25 @@ model SystemSetting {
 
   @@map("system_settings")
 }
+
+model RegistrationInvite {
+  id           String      @id @default(cuid())
+  token        String      @unique
+  role         String      @default("READ_ONLY")
+  departmentId String?
+  position     String?
+  expiresAt    DateTime
+  isUsed       Boolean     @default(false)
+  usedAt       DateTime?
+  usedByUserId String?     @unique
+  createdById  String
+  createdAt    DateTime    @default(now())
+
+  department   Department? @relation(fields: [departmentId], references: [id])
+  createdBy    User        @relation("InviteCreator", fields: [createdById], references: [id])
+  usedBy       User?       @relation("InviteUser", fields: [usedByUserId], references: [id])
+
+  @@index([token])
+  @@map("registration_invites")
+}
+

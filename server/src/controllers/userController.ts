@@ -1,4 +1,5 @@
 import bcrypt from 'bcryptjs';
+import crypto from 'crypto';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../prisma/client';
@@ -336,4 +337,102 @@ export async function deleteUser(req: Request, res: Response) {
     message: `User ${user.fullName} (${user.username}) was successfully deleted.`,
   });
 }
+
+const createInviteSchema = z.object({
+  role: z.enum([
+    Roles.SUPER_ADMIN,
+    Roles.ADMIN,
+    Roles.SOP_CREATOR,
+    Roles.DEPARTMENT_HEAD,
+    Roles.DEPARTMENT_REPRESENTATIVE,
+    Roles.REVIEWER,
+    Roles.APPROVER,
+    Roles.READ_ONLY,
+  ]),
+  departmentId: z.string().optional().nullable(),
+  position: z.string().optional().nullable(),
+  expiresInDays: z.number().int().min(1).max(90).default(7),
+});
+
+export async function createRegistrationInvite(req: Request, res: Response) {
+  const data = createInviteSchema.parse(req.body);
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresInDays = data.expiresInDays || 7;
+  const expiresAt = new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000);
+
+  const invite = await prisma.registrationInvite.create({
+    data: {
+      token,
+      role: data.role,
+      departmentId: data.departmentId || null,
+      position: data.position || null,
+      expiresAt,
+      createdById: req.user!.id,
+    },
+    include: {
+      department: true,
+      createdBy: { select: { fullName: true, username: true } },
+    },
+  });
+
+  await logAudit({
+    userId: req.user?.id,
+    action: 'INVITE_LINK_CREATED',
+    entity: 'RegistrationInvite',
+    entityId: invite.id,
+    newValue: { role: invite.role, department: invite.department?.name, expiresAt: invite.expiresAt },
+    ipAddress: req.ip,
+  });
+
+  return res.status(201).json({
+    success: true,
+    message: 'Registration link generated successfully.',
+    data: {
+      ...invite,
+      inviteUrl: `/register?token=${invite.token}`,
+    },
+  });
+}
+
+export async function listRegistrationInvites(req: Request, res: Response) {
+  const invites = await prisma.registrationInvite.findMany({
+    orderBy: { createdAt: 'desc' },
+    include: {
+      department: true,
+      createdBy: { select: { fullName: true, username: true } },
+      usedBy: { select: { fullName: true, username: true, email: true, employeeId: true } },
+    },
+  });
+
+  return res.json({
+    success: true,
+    data: invites.map((inv) => ({
+      ...inv,
+      inviteUrl: `/register?token=${inv.token}`,
+      isExpired: new Date() > inv.expiresAt,
+    })),
+  });
+}
+
+export async function deleteRegistrationInvite(req: Request, res: Response) {
+  const inviteId = req.params.id;
+  const invite = await prisma.registrationInvite.findUnique({ where: { id: inviteId } });
+  if (!invite) {
+    return res.status(404).json({ success: false, message: 'Invitation link not found.' });
+  }
+
+  await prisma.registrationInvite.delete({ where: { id: inviteId } });
+
+  await logAudit({
+    userId: req.user?.id,
+    action: 'INVITE_LINK_REVOKED',
+    entity: 'RegistrationInvite',
+    entityId: inviteId,
+    oldValue: { role: invite.role, token: invite.token },
+    ipAddress: req.ip,
+  });
+
+  return res.json({ success: true, message: 'Invitation link revoked successfully.' });
+}
+
 

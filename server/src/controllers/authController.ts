@@ -364,3 +364,173 @@ export async function demoLogin(req: Request, res: Response) {
     },
   });
 }
+
+const registerWithInviteSchema = z.object({
+  token: z.string().min(1, 'Invite token is required'),
+  firstName: z.string().min(1, 'First name is required').optional(),
+  lastName: z.string().min(1, 'Last name is required').optional(),
+  fullName: z.string().min(2, 'Full name is required').optional(),
+  username: z.string().min(3, 'Username must be at least 3 characters'),
+  email: z.string().email('Invalid email address'),
+  employeeId: z.string().min(1, 'Employee ID is required'),
+  password: z.string().min(8, 'Password must be at least 8 characters'),
+});
+
+export async function getInviteInfo(req: Request, res: Response) {
+  const { token } = req.params;
+
+  const invite = await prisma.registrationInvite.findUnique({
+    where: { token },
+    include: {
+      department: true,
+      createdBy: { select: { fullName: true } },
+    },
+  });
+
+  if (!invite) {
+    return res.status(404).json({
+      success: false,
+      message: 'This registration link is invalid or not found.',
+    });
+  }
+
+  if (invite.isUsed) {
+    return res.status(410).json({
+      success: false,
+      message: 'This registration link has already been used.',
+    });
+  }
+
+  if (new Date() > invite.expiresAt) {
+    return res.status(410).json({
+      success: false,
+      message: 'This registration link has expired. Please request a new link from your administrator.',
+    });
+  }
+
+  return res.json({
+    success: true,
+    data: {
+      token: invite.token,
+      role: invite.role,
+      departmentId: invite.departmentId,
+      department: invite.department ? { id: invite.department.id, name: invite.department.name, code: invite.department.code } : null,
+      position: invite.position,
+      expiresAt: invite.expiresAt,
+      createdByName: invite.createdBy?.fullName,
+    },
+  });
+}
+
+export async function registerWithInvite(req: Request, res: Response) {
+  const data = registerWithInviteSchema.parse(req.body);
+
+  const invite = await prisma.registrationInvite.findUnique({
+    where: { token: data.token },
+    include: { department: true },
+  });
+
+  if (!invite) {
+    return res.status(404).json({
+      success: false,
+      message: 'This registration link is invalid or does not exist.',
+    });
+  }
+
+  if (invite.isUsed) {
+    return res.status(410).json({
+      success: false,
+      message: 'This registration link has already been used.',
+    });
+  }
+
+  if (new Date() > invite.expiresAt) {
+    return res.status(410).json({
+      success: false,
+      message: 'This registration link has expired.',
+    });
+  }
+
+  const normalizedUsername = data.username.toLowerCase().trim();
+  const normalizedEmail = data.email.toLowerCase().trim();
+  const normalizedEmpId = data.employeeId.trim();
+
+  // Check unique constraints
+  const existing = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { username: normalizedUsername },
+        { email: normalizedEmail },
+        { employeeId: normalizedEmpId },
+      ],
+    },
+  });
+
+  if (existing) {
+    return res.status(400).json({
+      success: false,
+      message: 'A user with this Employee ID, username, or email already exists.',
+    });
+  }
+
+  const fullName = data.fullName?.trim() || [data.firstName, data.lastName].filter(Boolean).join(' ').trim();
+  if (!fullName) {
+    return res.status(400).json({ success: false, message: 'Full name is required' });
+  }
+
+  const passwordHash = await bcrypt.hash(data.password, 10);
+
+  // Transaction: Create user and mark invite as used
+  const user = await prisma.$transaction(async (tx) => {
+    const newUser = await tx.user.create({
+      data: {
+        employeeId: normalizedEmpId,
+        username: normalizedUsername,
+        fullName,
+        email: normalizedEmail,
+        passwordHash,
+        role: invite.role,
+        departmentId: invite.departmentId,
+        position: invite.position,
+        isActive: true,
+        isDemoUser: false,
+      },
+      include: { department: true },
+    });
+
+    await tx.registrationInvite.update({
+      where: { id: invite.id },
+      data: {
+        isUsed: true,
+        usedAt: new Date(),
+        usedByUserId: newUser.id,
+      },
+    });
+
+    return newUser;
+  });
+
+  await logAudit({
+    userId: user.id,
+    username: user.username,
+    action: 'USER_REGISTERED_VIA_INVITE',
+    entity: 'User',
+    entityId: user.id,
+    newValue: { username: user.username, email: user.email, role: user.role, department: user.department?.name },
+    ipAddress: req.ip,
+  });
+
+  return res.status(201).json({
+    success: true,
+    message: 'Account successfully registered. You can now log in.',
+    data: {
+      id: user.id,
+      username: user.username,
+      employeeId: user.employeeId,
+      fullName: user.fullName,
+      role: user.role,
+      department: user.department?.name,
+    },
+  });
+}
+

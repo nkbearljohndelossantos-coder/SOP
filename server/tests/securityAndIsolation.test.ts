@@ -49,10 +49,40 @@ describe('Security, Production Isolation, and RBAC Guard Tests', () => {
 
     const token = loginRes.body.data.token;
 
-    // Get any draft version
-    const version = await prisma.sOPVersion.findFirst({
+    // Get any draft version or create one
+    let version = await prisma.sOPVersion.findFirst({
       where: { isFinalized: false },
     });
+
+    if (!version) {
+      const creator = await prisma.user.findFirst({ where: { role: 'SOP_CREATOR' } }) ||
+        await prisma.user.findFirst();
+      const dept = await prisma.department.findFirst();
+      if (creator && dept) {
+        const sop = await prisma.sOP.create({
+          data: {
+            sopNumber: `TEST-SEC-SOP-${Date.now()}`,
+            title: 'Security Upload Test',
+            category: 'Safety',
+            ownerDeptId: dept.id,
+            createdById: creator.id,
+            versions: {
+              create: {
+                versionNumber: '1.0',
+                title: 'Security Upload Test Version',
+                purpose: 'Purpose',
+                scope: 'Scope',
+                responsibilities: 'Resp',
+                procedure: 'Proc',
+                createdById: creator.id,
+              },
+            },
+          },
+          include: { versions: true },
+        });
+        version = sop.versions[0];
+      }
+    }
 
     // Try uploading a disallowed file (.exe / application/x-msdownload)
     const uploadRes = await request(app)
@@ -97,4 +127,69 @@ describe('Security, Production Isolation, and RBAC Guard Tests', () => {
     expect(res.status).toBe(403);
     expect(res.body.message).toContain('already has an active Super Administrator');
   });
+
+  it('TEST 23: Admin can generate registration invite and user can register via invite link', async () => {
+    // 1. Log in as Super Admin
+    const adminLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'DemoPassword123!' });
+
+    const adminToken = adminLogin.body.data.token;
+    const dept = await prisma.department.findFirst();
+
+    // 2. Generate Registration Invite
+    const inviteRes = await request(app)
+      .post('/api/users/invites')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        role: 'REVIEWER',
+        departmentId: dept?.id,
+        expiresInDays: 7,
+      });
+
+    expect(inviteRes.status).toBe(201);
+    expect(inviteRes.body.success).toBe(true);
+    const { token: inviteToken } = inviteRes.body.data;
+    expect(inviteToken).toBeDefined();
+
+    // 3. Query public invite info
+    const infoRes = await request(app).get(`/api/auth/invite/${inviteToken}`);
+    expect(infoRes.status).toBe(200);
+    expect(infoRes.body.data.role).toBe('REVIEWER');
+
+    // 4. Complete Registration with invite token
+    const uniqueSuffix = Date.now().toString().slice(-4);
+    const regRes = await request(app)
+      .post('/api/auth/register-with-invite')
+      .send({
+        token: inviteToken,
+        firstName: 'Invited',
+        lastName: 'Employee',
+        employeeId: `EMP-INV-${uniqueSuffix}`,
+        username: `inviteduser${uniqueSuffix}`,
+        email: `invited${uniqueSuffix}@nkb.local`,
+        password: 'Password12345!',
+      });
+
+    expect(regRes.status).toBe(201);
+    expect(regRes.body.success).toBe(true);
+    expect(regRes.body.data.role).toBe('REVIEWER');
+
+    // 5. Verify invite cannot be reused
+    const reuseRes = await request(app).get(`/api/auth/invite/${inviteToken}`);
+    expect(reuseRes.status).toBe(410);
+
+    // 6. Verify newly registered user can log in with their Employee ID and password
+    const userLoginRes = await request(app)
+      .post('/api/auth/login')
+      .send({
+        identifier: `EMP-INV-${uniqueSuffix}`,
+        password: 'Password12345!',
+      });
+
+    expect(userLoginRes.status).toBe(200);
+    expect(userLoginRes.body.success).toBe(true);
+    expect(userLoginRes.body.data.user.role).toBe('REVIEWER');
+  });
 });
+
