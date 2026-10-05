@@ -26,7 +26,7 @@ export const DashboardPage: React.FC = () => {
       try {
         setLoading(true);
         const res = await api.get('/sops');
-        setSops(res.data.sops || []);
+        setSops(res.data.sops || res.data.data || []);
       } catch (err) {
         console.error('Failed to load SOPs for dashboard', err);
       } finally {
@@ -42,19 +42,27 @@ export const DashboardPage: React.FC = () => {
   ).length;
   const inReviewSOPs = sops.filter(
     (s) =>
+      s.status === SOPStatuses.INITIAL_REVIEW ||
       s.status === SOPStatuses.UNDER_REVIEW ||
+      s.status === SOPStatuses.DISCUSSION ||
       s.status === SOPStatuses.DEPARTMENT_DISCUSSION ||
       s.status === SOPStatuses.REMARKS_CONSOLIDATION
   ).length;
   const pendingApprovalSOPs = sops.filter(
     (s) =>
+      s.status === SOPStatuses.DEPARTMENT_APPROVAL ||
       s.status === SOPStatuses.PENDING_DEPARTMENT_APPROVAL ||
+      s.status === SOPStatuses.FINAL_REVIEW ||
       s.status === SOPStatuses.PENDING_FINAL_REVIEW
   ).length;
   const changesRequestedSOPs = sops.filter(
-    (s) => s.status === SOPStatuses.CHANGES_REQUESTED
+    (s) =>
+      s.status === SOPStatuses.CHANGES_REQUESTED ||
+      s.status === SOPStatuses.RETURNED_TO_CREATOR
   ).length;
-  const finalizedSOPs = sops.filter((s) => s.status === SOPStatuses.FINALIZED).length;
+  const finalizedSOPs = sops.filter(
+    (s) => s.status === SOPStatuses.FINALIZED || s.status === SOPStatuses.APPROVED
+  ).length;
 
   // Identify SOPs that might require current user's department attention
   const myActionSOPs = sops.filter((s) => {
@@ -67,21 +75,37 @@ export const DashboardPage: React.FC = () => {
     );
     if (!myParticipant) return false;
 
+    const isPendingApprovalStage =
+      s.status === SOPStatuses.DEPARTMENT_APPROVAL ||
+      s.status === SOPStatuses.PENDING_DEPARTMENT_APPROVAL ||
+      version.status === SOPStatuses.DEPARTMENT_APPROVAL ||
+      version.status === SOPStatuses.PENDING_DEPARTMENT_APPROVAL;
+
     // If I am Required Approver and status is PENDING_DEPARTMENT_APPROVAL and my dept hasn't approved
     if (
       myParticipant.participationType === 'REQUIRED_APPROVER' &&
-      s.status === SOPStatuses.PENDING_DEPARTMENT_APPROVAL &&
+      isPendingApprovalStage &&
       myParticipant.status !== 'APPROVED'
     ) {
       return true;
     }
 
+    const isReviewStage =
+      s.status === SOPStatuses.INITIAL_REVIEW ||
+      s.status === SOPStatuses.UNDER_REVIEW ||
+      s.status === SOPStatuses.DISCUSSION ||
+      s.status === SOPStatuses.DEPARTMENT_DISCUSSION ||
+      version.status === SOPStatuses.INITIAL_REVIEW ||
+      version.status === SOPStatuses.UNDER_REVIEW ||
+      version.status === SOPStatuses.DISCUSSION ||
+      version.status === SOPStatuses.DEPARTMENT_DISCUSSION;
+
     // If I am Required Reviewer and SOP is in review/discussion and my dept hasn't reviewed
     if (
       (myParticipant.participationType === 'REQUIRED_REVIEWER' ||
         myParticipant.participationType === 'REQUIRED_APPROVER') &&
-      (s.status === SOPStatuses.UNDER_REVIEW || s.status === SOPStatuses.DEPARTMENT_DISCUSSION) &&
-      myParticipant.status === 'PENDING'
+      isReviewStage &&
+      (myParticipant.status === 'PENDING' || !myParticipant.agreementConfirmed)
     ) {
       return true;
     }

@@ -137,6 +137,18 @@ export async function listSOPs(req: Request, res: Response) {
             reviewDate: true,
             isFinalized: true,
             updatedAt: true,
+            participants: {
+              select: {
+                id: true,
+                departmentId: true,
+                participationType: true,
+                status: true,
+                agreementConfirmed: true,
+                department: {
+                  select: { id: true, name: true, code: true },
+                },
+              },
+            },
           },
         },
       },
@@ -144,9 +156,15 @@ export async function listSOPs(req: Request, res: Response) {
     }),
   ]);
 
+  const sopsFormatted = sops.map((s) => ({
+    ...s,
+    currentVersion: s.versions?.[0] || null,
+  }));
+
   return res.json({
     success: true,
-    data: sops,
+    data: sopsFormatted,
+    sops: sopsFormatted,
     pagination: {
       page,
       limit,
@@ -260,10 +278,19 @@ export async function getSOP(req: Request, res: Response) {
 
   const matrix = await calculateApprovalMatrix(version.id);
 
+  const sopPayload = {
+    ...sop,
+    currentVersion: version,
+    currentVersionNumber: version.versionNumber,
+  };
+
   return res.json({
     success: true,
+    sop: sopPayload,
+    currentVersion: version,
+    matrix,
     data: {
-      sop,
+      sop: sopPayload,
       currentVersion: version,
       matrix,
     },
@@ -322,14 +349,34 @@ export async function handleCreateSOP(req: Request, res: Response) {
 }
 
 export async function handleUpdateDraft(req: Request, res: Response) {
-  const { versionId } = req.params;
+  let targetVersionId = req.params.versionId || req.params.id;
   const data = updateDraftSchema.parse(req.body);
+
+  // If the parameter is an SOP ID instead of a Version ID, find the latest draft version for this SOP
+  const versionExists = await prisma.sOPVersion.findUnique({ where: { id: targetVersionId } });
+  if (!versionExists) {
+    const sopExists = await prisma.sOP.findUnique({
+      where: { id: targetVersionId },
+      include: {
+        versions: {
+          orderBy: { versionInt: 'desc' },
+          take: 1,
+        },
+      },
+    });
+
+    if (sopExists && sopExists.versions[0]) {
+      targetVersionId = sopExists.versions[0].id;
+    } else {
+      return res.status(404).json({ success: false, message: 'SOP or Version not found.' });
+    }
+  }
 
   const effectiveDate = data.effectiveDate !== undefined ? (data.effectiveDate ? new Date(data.effectiveDate) : null) : undefined;
   const reviewDate = data.reviewDate !== undefined ? (data.reviewDate ? new Date(data.reviewDate) : null) : undefined;
 
   const updated = await updateDraft(
-    versionId,
+    targetVersionId,
     req.user!.id,
     {
       ...data,

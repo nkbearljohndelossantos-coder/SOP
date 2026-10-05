@@ -24,6 +24,7 @@ router.get('/:id/print', asyncHandler(getPrintableSOP));
 router.get('/:id', asyncHandler(getSOP));
 router.post('/', requirePermission(Permissions.SOP_CREATE), asyncHandler(handleCreateSOP));
 router.put('/versions/:versionId', requirePermission(Permissions.SOP_EDIT_DRAFT), asyncHandler(handleUpdateDraft));
+router.put('/:id', requirePermission(Permissions.SOP_EDIT_DRAFT), asyncHandler(handleUpdateDraft));
 router.post('/:id/revisions', requirePermission(Permissions.SOP_REVISE), asyncHandler(handleCreateRevision));
 router.patch('/:id/archive', requirePermission(Permissions.SOP_ARCHIVE), asyncHandler(archiveSOP));
 

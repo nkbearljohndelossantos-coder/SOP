@@ -32,21 +32,28 @@ export const SOPStatusBadge: React.FC<{ status: SOPStatus }> = ({ status }) => {
     case SOPStatuses.DRAFT:
     case SOPStatuses.REVISION_DRAFT:
       return <Badge variant="gray">Draft</Badge>;
+    case SOPStatuses.INITIAL_REVIEW:
     case SOPStatuses.UNDER_REVIEW:
       return <Badge variant="info">Under Review</Badge>;
+    case SOPStatuses.DISCUSSION:
     case SOPStatuses.DEPARTMENT_DISCUSSION:
       return <Badge variant="primary">Dept Discussion</Badge>;
     case SOPStatuses.REMARKS_CONSOLIDATION:
       return <Badge variant="warning">Consolidating Remarks</Badge>;
+    case SOPStatuses.DEPARTMENT_APPROVAL:
     case SOPStatuses.PENDING_DEPARTMENT_APPROVAL:
       return <Badge variant="warning">Awaiting Approvals</Badge>;
+    case SOPStatuses.FINAL_REVIEW:
     case SOPStatuses.PENDING_FINAL_REVIEW:
       return <Badge variant="primary">Final Verification</Badge>;
     case SOPStatuses.FINALIZED:
+    case SOPStatuses.APPROVED:
       return <Badge variant="success">Finalized & Effective</Badge>;
     case SOPStatuses.CHANGES_REQUESTED:
+    case SOPStatuses.RETURNED_TO_CREATOR:
       return <Badge variant="danger">Changes Requested</Badge>;
     case SOPStatuses.OBSOLETE:
+    case SOPStatuses.ARCHIVED:
       return <Badge variant="gray">Obsolete</Badge>;
     default:
       return <Badge>{status}</Badge>;

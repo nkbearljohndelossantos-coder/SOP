@@ -52,6 +52,16 @@ export async function notifyConcernedUsers(params: {
     depts.forEach((d) => {
       if (d.headUserId) targetUserIds.add(d.headUserId);
     });
+
+    // Also notify system administrators for executive oversight
+    const admins = await prisma.user.findMany({
+      where: {
+        role: { in: ['SUPER_ADMIN', 'ADMIN'] },
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    admins.forEach((u) => targetUserIds.add(u.id));
   }
 
   for (const userId of targetUserIds) {

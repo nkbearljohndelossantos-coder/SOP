@@ -17,8 +17,8 @@ export const ReportsPage: React.FC = () => {
           api.get('/sops'),
           api.get('/departments'),
         ]);
-        setSops(sopRes.data.sops || []);
-        setDepartments(deptRes.data.departments || []);
+        setSops(sopRes.data.sops || sopRes.data.data || []);
+        setDepartments(deptRes.data.departments || deptRes.data.data || []);
       } catch (err) {
         console.error('Failed to load reports data', err);
       } finally {
@@ -29,15 +29,21 @@ export const ReportsPage: React.FC = () => {
   }, []);
 
   const totalSOPs = sops.length;
-  const finalizedSOPs = sops.filter((s) => s.status === SOPStatuses.FINALIZED).length;
+  const finalizedSOPs = sops.filter(
+    (s) => s.status === SOPStatuses.FINALIZED || s.status === SOPStatuses.APPROVED
+  ).length;
   const pendingApprovals = sops.filter(
     (s) =>
+      s.status === SOPStatuses.DEPARTMENT_APPROVAL ||
       s.status === SOPStatuses.PENDING_DEPARTMENT_APPROVAL ||
+      s.status === SOPStatuses.FINAL_REVIEW ||
       s.status === SOPStatuses.PENDING_FINAL_REVIEW
   ).length;
   const inDiscussion = sops.filter(
     (s) =>
+      s.status === SOPStatuses.INITIAL_REVIEW ||
       s.status === SOPStatuses.UNDER_REVIEW ||
+      s.status === SOPStatuses.DISCUSSION ||
       s.status === SOPStatuses.DEPARTMENT_DISCUSSION ||
       s.status === SOPStatuses.REMARKS_CONSOLIDATION
   ).length;

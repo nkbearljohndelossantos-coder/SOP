@@ -34,8 +34,8 @@ export const SOPListPage: React.FC = () => {
           api.get('/sops'),
           api.get('/departments'),
         ]);
-        setSops(sopRes.data.sops || []);
-        setDepartments(deptRes.data.departments || []);
+        setSops(sopRes.data.sops || sopRes.data.data || []);
+        setDepartments(deptRes.data.departments || deptRes.data.data || []);
       } catch (err) {
         console.error('Failed to load SOPs', err);
       } finally {
@@ -52,7 +52,7 @@ export const SOPListPage: React.FC = () => {
       q &&
       !sop.sopNumber.toLowerCase().includes(q) &&
       !sop.title.toLowerCase().includes(q) &&
-      !sop.department.name.toLowerCase().includes(q)
+      !sop.department?.name?.toLowerCase().includes(q)
     ) {
       return false;
     }
@@ -71,22 +71,29 @@ export const SOPListPage: React.FC = () => {
     }
     if (statusFilter === 'IN_REVIEW') {
       return (
+        sop.status === SOPStatuses.INITIAL_REVIEW ||
         sop.status === SOPStatuses.UNDER_REVIEW ||
+        sop.status === SOPStatuses.DISCUSSION ||
         sop.status === SOPStatuses.DEPARTMENT_DISCUSSION ||
         sop.status === SOPStatuses.REMARKS_CONSOLIDATION
       );
     }
     if (statusFilter === 'AWAITING_APPROVAL') {
       return (
+        sop.status === SOPStatuses.DEPARTMENT_APPROVAL ||
         sop.status === SOPStatuses.PENDING_DEPARTMENT_APPROVAL ||
+        sop.status === SOPStatuses.FINAL_REVIEW ||
         sop.status === SOPStatuses.PENDING_FINAL_REVIEW
       );
     }
     if (statusFilter === 'CHANGES_REQUESTED') {
-      return sop.status === SOPStatuses.CHANGES_REQUESTED;
+      return (
+        sop.status === SOPStatuses.CHANGES_REQUESTED ||
+        sop.status === SOPStatuses.RETURNED_TO_CREATOR
+      );
     }
     if (statusFilter === 'FINALIZED') {
-      return sop.status === SOPStatuses.FINALIZED;
+      return sop.status === SOPStatuses.FINALIZED || sop.status === SOPStatuses.APPROVED;
     }
 
     return true;

@@ -13,6 +13,7 @@ router.use(authenticateToken);
 
 router.get('/', asyncHandler(listNotifications));
 router.patch('/:id/read', asyncHandler(markAsRead));
+router.patch('/read-all', asyncHandler(markAllAsRead));
 router.post('/read-all', asyncHandler(markAllAsRead));
 
 export default router;

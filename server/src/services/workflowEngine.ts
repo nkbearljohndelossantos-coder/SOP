@@ -542,3 +542,75 @@ export async function finalizeSOP(versionId: string, userId: string, ipAddress?:
 
   return finalizedVersion;
 }
+
+export async function advanceToDiscussion(versionId: string, userId: string, ipAddress?: string) {
+  const version = await prisma.sOPVersion.findUnique({
+    where: { id: versionId },
+    include: { sop: true, participants: true },
+  });
+
+  if (!version) throw new Error('SOP Version not found.');
+  if (version.isFinalized) throw new Error('Cannot advance a finalized SOP.');
+
+  const updatedVersion = await prisma.$transaction(async (tx) => {
+    const updated = await tx.sOPVersion.update({
+      where: { id: versionId },
+      data: { status: SOPStatuses.DISCUSSION },
+    });
+
+    await tx.sOP.update({
+      where: { id: version.sopId },
+      data: { status: SOPStatuses.DISCUSSION },
+    });
+
+    return updated;
+  });
+
+  await logAudit({
+    userId,
+    action: 'WORKFLOW_STAGE_CHANGED',
+    entity: 'SOPVersion',
+    entityId: versionId,
+    oldValue: { status: version.status },
+    newValue: { status: SOPStatuses.DISCUSSION },
+    ipAddress,
+  });
+
+  return updatedVersion;
+}
+
+export async function advanceToApproval(versionId: string, userId: string, ipAddress?: string) {
+  const version = await prisma.sOPVersion.findUnique({
+    where: { id: versionId },
+    include: { sop: true, participants: true },
+  });
+
+  if (!version) throw new Error('SOP Version not found.');
+  if (version.isFinalized) throw new Error('Cannot advance a finalized SOP.');
+
+  const updatedVersion = await prisma.$transaction(async (tx) => {
+    const updated = await tx.sOPVersion.update({
+      where: { id: versionId },
+      data: { status: SOPStatuses.DEPARTMENT_APPROVAL },
+    });
+
+    await tx.sOP.update({
+      where: { id: version.sopId },
+      data: { status: SOPStatuses.DEPARTMENT_APPROVAL },
+    });
+
+    return updated;
+  });
+
+  await logAudit({
+    userId,
+    action: 'WORKFLOW_STAGE_CHANGED',
+    entity: 'SOPVersion',
+    entityId: versionId,
+    oldValue: { status: version.status },
+    newValue: { status: SOPStatuses.DEPARTMENT_APPROVAL },
+    ipAddress,
+  });
+
+  return updatedVersion;
+}

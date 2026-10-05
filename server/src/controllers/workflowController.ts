@@ -2,6 +2,8 @@ import { Request, Response } from 'express';
 import { z } from 'zod';
 import { ApprovalDecisions } from '../types';
 import {
+  advanceToApproval,
+  advanceToDiscussion,
   confirmAgreement,
   finalizeSOP,
   markReviewCompleted,
@@ -12,9 +14,13 @@ import {
 
 const meetingSchema = z.object({
   meetingDate: z.string(),
-  agenda: z.string().min(5),
+  agenda: z.string().optional(),
   concerns: z.string().optional(),
   recommendations: z.string().optional(),
+  meetingMode: z.string().optional(),
+  minutesOfMeeting: z.string().optional(),
+  attendees: z.string().optional(),
+  decisions: z.string().optional(),
 });
 
 const agreementSchema = z.object({
@@ -23,11 +29,14 @@ const agreementSchema = z.object({
 
 const approvalSchema = z.object({
   departmentId: z.string().min(1),
-  decision: z.enum([
-    ApprovalDecisions.APPROVED,
-    ApprovalDecisions.CHANGES_REQUESTED,
-    ApprovalDecisions.REJECTED,
-  ]),
+  decision: z
+    .enum([
+      ApprovalDecisions.APPROVED,
+      ApprovalDecisions.CHANGES_REQUESTED,
+      ApprovalDecisions.REJECTED,
+    ])
+    .optional()
+    .default(ApprovalDecisions.APPROVED),
   reason: z.string().optional(),
 });
 
@@ -55,9 +64,9 @@ export async function handleScheduleMeeting(req: Request, res: Response) {
     req.user!.id,
     {
       meetingDate: new Date(data.meetingDate),
-      agenda: data.agenda,
-      concerns: data.concerns,
-      recommendations: data.recommendations,
+      agenda: data.agenda || data.minutesOfMeeting || 'Inter-department Review Meeting',
+      concerns: data.concerns || data.attendees,
+      recommendations: data.recommendations || data.decisions,
     },
     req.ip
   );
@@ -134,5 +143,52 @@ export async function handleFinalizeSOP(req: Request, res: Response) {
     success: true,
     message: 'SOP successfully finalized and published. The document is now permanently locked and read-only.',
     data: finalized,
+  });
+}
+
+export async function handleRequestChanges(req: Request, res: Response) {
+  const { versionId } = req.params;
+  const { departmentId, reason } = req.body;
+  if (!departmentId) {
+    return res.status(400).json({ success: false, message: 'Department ID is required.' });
+  }
+  if (!reason || reason.trim().length < 5) {
+    return res.status(400).json({ success: false, message: 'A detailed reason is required when requesting changes.' });
+  }
+
+  const approval = await submitApprovalDecision(
+    versionId,
+    departmentId,
+    req.user!.id,
+    ApprovalDecisions.CHANGES_REQUESTED,
+    reason.trim(),
+    req.ip,
+    req.headers['user-agent']
+  );
+
+  return res.json({
+    success: true,
+    message: 'Changes requested. SOP returned to creator with documented reason.',
+    data: approval,
+  });
+}
+
+export async function handleAdvanceToDiscussion(req: Request, res: Response) {
+  const { versionId } = req.params;
+  const result = await advanceToDiscussion(versionId, req.user!.id, req.ip);
+  return res.json({
+    success: true,
+    message: 'Workflow advanced to Discussion stage.',
+    data: result,
+  });
+}
+
+export async function handleAdvanceToApproval(req: Request, res: Response) {
+  const { versionId } = req.params;
+  const result = await advanceToApproval(versionId, req.user!.id, req.ip);
+  return res.json({
+    success: true,
+    message: 'Workflow advanced to Department Approval stage.',
+    data: result,
   });
 }

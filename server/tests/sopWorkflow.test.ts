@@ -362,4 +362,90 @@ describe('SOP Lifecycle and Critical Business Rule Tests', () => {
     expect(updateB.status).toBe(409);
     expect(updateB.body.message).toContain('Concurrency Conflict');
   });
+
+  it('TEST 24: Workflow route aliases (/:versionId and /versions/:versionId) and stage advance work properly', async () => {
+    // Create new test draft
+    const newDraftRes = await request(app)
+      .post('/api/sops')
+      .set('Authorization', `Bearer ${creatorToken}`)
+      .send({
+        sopNumber: 'SOP-ALIAS-001',
+        title: 'Workflow Alias Route Test',
+        category: 'Information Technology',
+        ownerDeptId: whDeptId,
+        purpose: 'Testing workflow route compatibility',
+        scope: 'Production plantwide',
+        responsibilities: 'All employees',
+        procedure: 'Step 1: Execute test',
+        participants: [{ departmentId: whDeptId, participationType: ParticipationTypes.REQUIRED_APPROVER }],
+      });
+    expect(newDraftRes.status).toBe(201);
+    const verId = newDraftRes.body.data.version.id;
+
+    // Submit via alias route
+    const submitRes = await request(app)
+      .post(`/api/workflow/${verId}/submit-for-review`)
+      .set('Authorization', `Bearer ${creatorToken}`)
+      .send({});
+    expect(submitRes.status).toBe(200);
+
+    // Advance to discussion via alias route
+    const advanceDiscRes = await request(app)
+      .post(`/api/workflow/${verId}/advance-to-discussion`)
+      .set('Authorization', `Bearer ${creatorToken}`)
+      .send({});
+    expect(advanceDiscRes.status).toBe(200);
+
+    // Record meeting via alias route
+    const meetingRes = await request(app)
+      .post(`/api/workflow/${verId}/meetings`)
+      .set('Authorization', `Bearer ${whHeadToken}`)
+      .send({
+        meetingDate: new Date().toISOString(),
+        minutesOfMeeting: 'Discussed procedure with warehouse team.',
+      });
+    expect(meetingRes.status).toBe(201);
+
+    // Confirm agreement via alias route
+    const agreeRes = await request(app)
+      .post(`/api/workflow/${verId}/confirm-agreement`)
+      .set('Authorization', `Bearer ${whHeadToken}`)
+      .send({ departmentId: whDeptId });
+    expect(agreeRes.status).toBe(200);
+
+    // Approve via alias route
+    const approveRes = await request(app)
+      .post(`/api/workflow/${verId}/approve`)
+      .set('Authorization', `Bearer ${whHeadToken}`)
+      .send({ departmentId: whDeptId, decision: 'APPROVED' });
+    expect(approveRes.status).toBe(200);
+  });
+
+  it('TEST 25: listSOPs returns both data and sops with currentVersion and participants', async () => {
+    const listRes = await request(app)
+      .get('/api/sops')
+      .set('Authorization', `Bearer ${adminToken}`);
+
+    expect(listRes.status).toBe(200);
+    expect(listRes.body.data).toBeDefined();
+    expect(listRes.body.sops).toBeDefined();
+    expect(Array.isArray(listRes.body.sops)).toBe(true);
+    if (listRes.body.sops.length > 0) {
+      const first = listRes.body.sops[0];
+      expect(first.currentVersion).toBeDefined();
+      expect(first.currentVersion.participants).toBeDefined();
+    }
+  });
+
+  it('TEST 26: Notification read-all supports both PATCH and POST', async () => {
+    const patchRes = await request(app)
+      .patch('/api/notifications/read-all')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(patchRes.status).toBe(200);
+
+    const postRes = await request(app)
+      .post('/api/notifications/read-all')
+      .set('Authorization', `Bearer ${adminToken}`);
+    expect(postRes.status).toBe(200);
+  });
 });
