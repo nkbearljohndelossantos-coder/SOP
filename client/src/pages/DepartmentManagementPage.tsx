@@ -20,12 +20,12 @@ export const DepartmentManagementPage: React.FC = () => {
 
   // Add Dept Modal
   const [showAddModal, setShowAddModal] = useState(false);
-  const [deptForm, setDeptForm] = useState({ name: '', code: '', description: '' });
+  const [deptForm, setDeptForm] = useState({ name: '', code: '' });
 
   // Edit Dept Modal
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingDept, setEditingDept] = useState<Department | null>(null);
-  const [editForm, setEditForm] = useState({ name: '', code: '', description: '', headUserId: '' });
+  const [editForm, setEditForm] = useState({ name: '', code: '', headUserId: '' });
 
   const fetchData = async () => {
     try {
@@ -64,9 +64,12 @@ export const DepartmentManagementPage: React.FC = () => {
   const handleCreateDept = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.post('/departments', deptForm);
+      await api.post('/departments', {
+        name: deptForm.name.trim(),
+        code: deptForm.code.trim().toUpperCase(),
+      });
       setShowAddModal(false);
-      setDeptForm({ name: '', code: '', description: '' });
+      setDeptForm({ name: '', code: '' });
       setSuccess(`Department ${deptForm.name} successfully created.`);
       setTimeout(() => setSuccess(null), 3000);
       await fetchData();
@@ -94,7 +97,6 @@ export const DepartmentManagementPage: React.FC = () => {
     setEditForm({
       name: dept.name,
       code: dept.code,
-      description: dept.description || '',
       headUserId: dept.headUserId || dept.headId || dept.head?.id || '',
     });
     setShowEditModal(true);
@@ -107,7 +109,6 @@ export const DepartmentManagementPage: React.FC = () => {
       await api.put(`/departments/${editingDept.id}`, {
         name: editForm.name.trim(),
         code: editForm.code.trim().toUpperCase(),
-        description: editForm.description.trim() || null,
         headUserId: editForm.headUserId || null,
       });
       setShowEditModal(false);
@@ -197,9 +198,6 @@ export const DepartmentManagementPage: React.FC = () => {
                       {dept.code}
                     </span>
                     <h3 className="font-bold text-sm text-slate-800 mt-2">{dept.name}</h3>
-                    {dept.description && (
-                      <p className="text-xs text-slate-500 mt-1 line-clamp-2">{dept.description}</p>
-                    )}
                   </div>
                   <Building2 className="w-5 h-5 text-slate-400 flex-shrink-0" />
                 </div>
@@ -333,17 +331,6 @@ export const DepartmentManagementPage: React.FC = () => {
             />
           </div>
 
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">Description</label>
-            <textarea
-              rows={3}
-              placeholder="Department function..."
-              value={deptForm.description}
-              onChange={(e) => setDeptForm({ ...deptForm, description: e.target.value })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-            />
-          </div>
-
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
@@ -407,17 +394,6 @@ export const DepartmentManagementPage: React.FC = () => {
                 </option>
               ))}
             </select>
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">Description</label>
-            <textarea
-              rows={3}
-              placeholder="Department function and responsibilities..."
-              value={editForm.description}
-              onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
           </div>
 
           <div className="flex justify-end gap-2 pt-2">
