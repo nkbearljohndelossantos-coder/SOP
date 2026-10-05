@@ -52,8 +52,10 @@ export type ParticipantStatus = (typeof ParticipantStatuses)[keyof typeof Partic
 export interface User {
   id: string;
   email: string;
+  username?: string;
   firstName: string;
   lastName: string;
+  fullName?: string;
   employeeId?: string | null;
   role: Role;
   departmentId?: string | null;
@@ -68,6 +70,7 @@ export interface Department {
   code: string;
   description?: string | null;
   headId?: string | null;
+  headUserId?: string | null;
   head?: User | null;
   representatives?: {
     id: string;

@@ -110,7 +110,11 @@ export async function createDepartment(req: Request, res: Response) {
 }
 
 export async function updateDepartment(req: Request, res: Response) {
-  const data = departmentSchema.partial().parse(req.body);
+  const headIdParam = req.body.headUserId !== undefined ? req.body.headUserId : req.body.headId;
+  const data = departmentSchema.partial().parse({
+    ...req.body,
+    headUserId: headIdParam === '' ? null : headIdParam,
+  });
   const deptId = req.params.id;
 
   const existing = await prisma.department.findUnique({ where: { id: deptId } });
@@ -118,13 +122,43 @@ export async function updateDepartment(req: Request, res: Response) {
     return res.status(404).json({ success: false, message: 'Department not found' });
   }
 
+  // Check code/name conflict with other departments
+  if (data.code || data.name) {
+    const conflict = await prisma.department.findFirst({
+      where: {
+        id: { not: deptId },
+        OR: [
+          ...(data.code ? [{ code: data.code.toUpperCase() }] : []),
+          ...(data.name ? [{ name: data.name }] : []),
+        ],
+      },
+    });
+    if (conflict) {
+      return res.status(400).json({
+        success: false,
+        message: 'A department with this code or name already exists.',
+      });
+    }
+  }
+
+  // Clear any existing department headed by this user if assigning a head (headUserId is unique)
+  if (data.headUserId) {
+    await prisma.department.updateMany({
+      where: {
+        id: { not: deptId },
+        headUserId: data.headUserId,
+      },
+      data: { headUserId: null },
+    });
+  }
+
   const updated = await prisma.department.update({
     where: { id: deptId },
     data: {
-      code: data.code?.toUpperCase(),
-      name: data.name,
-      description: data.description,
-      headUserId: data.headUserId,
+      code: data.code ? data.code.toUpperCase() : undefined,
+      name: data.name || undefined,
+      description: data.description !== undefined ? data.description : undefined,
+      headUserId: data.headUserId !== undefined ? data.headUserId : undefined,
     },
     include: { head: true },
   });
@@ -134,8 +168,8 @@ export async function updateDepartment(req: Request, res: Response) {
     action: 'DEPARTMENT_UPDATED',
     entity: 'Department',
     entityId: updated.id,
-    oldValue: { name: existing.name, headUserId: existing.headUserId },
-    newValue: { name: updated.name, headUserId: updated.headUserId },
+    oldValue: { code: existing.code, name: existing.name, headUserId: existing.headUserId, description: existing.description },
+    newValue: { code: updated.code, name: updated.name, headUserId: updated.headUserId, description: updated.description },
     ipAddress: req.ip,
   });
 
