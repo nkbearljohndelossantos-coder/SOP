@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import api from '../services/api';
 import { Department, ParticipationTypes, ParticipationType } from '../types';
@@ -7,13 +7,21 @@ import {
   Users,
   AlertCircle,
   ArrowLeft,
+  UploadCloud,
+  FileSpreadsheet,
+  Image as ImageIcon,
+  Paperclip,
+  X,
+  Sparkles,
 } from 'lucide-react';
 
 export const SOPCreatePage: React.FC = () => {
   const navigate = useNavigate();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Form State
@@ -26,6 +34,10 @@ export const SOPCreatePage: React.FC = () => {
   const [procedure, setProcedure] = useState('');
   const [relatedForms, setRelatedForms] = useState('');
   const [references, setReferences] = useState('');
+
+  // File Upload State
+  const [attachments, setAttachments] = useState<File[]>([]);
+  const [isDragging, setIsDragging] = useState(false);
 
   // Matrix State: map departmentId -> ParticipationType
   const [participantMatrix, setParticipantMatrix] = useState<Record<string, ParticipationType>>({});
@@ -73,6 +85,84 @@ export const SOPCreatePage: React.FC = () => {
     }));
   };
 
+  const formatFileSize = (bytes: number): string => {
+    if (bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  };
+
+  const handleFilesSelected = (selectedFiles: FileList | File[]) => {
+    const allowedExtensions = ['.pdf', '.docx', '.doc', '.xlsx', '.xls', '.jpg', '.jpeg', '.png'];
+    const newFiles: File[] = [];
+    const maxSizeBytes = 25 * 1024 * 1024; // 25 MB
+
+    Array.from(selectedFiles).forEach((file) => {
+      const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+      if (!allowedExtensions.includes(ext)) {
+        setError(`File "${file.name}" has an unsupported format. Allowed: PDF, DOCX, XLSX, JPG, PNG.`);
+        return;
+      }
+      if (file.size > maxSizeBytes) {
+        setError(`File "${file.name}" exceeds the 25 MB limit.`);
+        return;
+      }
+      // Avoid duplicate filenames
+      if (!attachments.some((a) => a.name === file.name && a.size === file.size)) {
+        newFiles.push(file);
+      }
+    });
+
+    if (newFiles.length > 0) {
+      setAttachments((prev) => [...prev, ...newFiles]);
+      setError(null);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleFilesSelected(e.dataTransfer.files);
+    }
+  };
+
+  const removeAttachment = (indexToRemove: number) => {
+    setAttachments((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handleAutoPopulateFromDoc = () => {
+    if (attachments.length === 0) return;
+    const primaryName = attachments[0].name;
+
+    if (!purpose.trim()) {
+      setPurpose(`Please refer to the attached controlled document: "${primaryName}" for the official purpose and regulatory scope.`);
+    }
+    if (!scope.trim()) {
+      setScope(`This standard operating procedure applies across operations defined within: "${primaryName}".`);
+    }
+    if (!responsibilities.trim()) {
+      setResponsibilities(`Departmental roles, supervision, and execution standards are documented in: "${primaryName}".`);
+    }
+    if (!procedure.trim()) {
+      setProcedure(`The sequential operational workflow, steps, and quality control checkpoints are outlined in the attached document:\n• Primary File: ${primaryName}\n\nPlease inspect the attached document under Controlled Attachments.`);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
@@ -82,9 +172,31 @@ export const SOPCreatePage: React.FC = () => {
       return;
     }
 
-    if (!purpose.trim() || !scope.trim() || !responsibilities.trim() || !procedure.trim()) {
-      setError('Purpose, Scope, Responsibilities, and Procedure sections are required for an SOP.');
-      return;
+    let finalPurpose = purpose.trim();
+    let finalScope = scope.trim();
+    let finalResponsibilities = responsibilities.trim();
+    let finalProcedure = procedure.trim();
+
+    // If file attachments exist, allow smart auto-reference if sections are left blank
+    if (attachments.length > 0) {
+      const primaryDoc = attachments[0].name;
+      if (!finalPurpose) {
+        finalPurpose = `Refer to the attached official document: ${primaryDoc}`;
+      }
+      if (!finalScope) {
+        finalScope = `Covers standard operating parameters documented in: ${primaryDoc}`;
+      }
+      if (!finalResponsibilities) {
+        finalResponsibilities = `Personnel responsibilities are designated as per: ${primaryDoc}`;
+      }
+      if (!finalProcedure) {
+        finalProcedure = `Step-by-step procedure is specified in the attached controlled document: ${primaryDoc}`;
+      }
+    } else {
+      if (!finalPurpose || !finalScope || !finalResponsibilities || !finalProcedure) {
+        setError('Purpose, Scope, Responsibilities, and Procedure sections are required for an SOP.');
+        return;
+      }
     }
 
     // Build participants payload
@@ -101,6 +213,8 @@ export const SOPCreatePage: React.FC = () => {
     }
 
     setSubmitting(true);
+    setUploadStatus('Creating SOP draft version 1.0...');
+
     try {
       const res = await api.post('/sops', {
         sopNumber: sopNumber.trim(),
@@ -108,21 +222,49 @@ export const SOPCreatePage: React.FC = () => {
         departmentId,
         ownerDeptId: departmentId,
         category: 'Standard Operating Procedure',
-        purpose,
-        scope,
-        responsibilities,
-        procedure,
+        purpose: finalPurpose,
+        scope: finalScope,
+        responsibilities: finalResponsibilities,
+        procedure: finalProcedure,
         relatedForms: relatedForms || undefined,
         references: references || undefined,
         participants,
       });
 
       const newSopId = res.data.sop?.id || res.data.data?.sop?.id || res.data.id;
+      const newVersionId = res.data.version?.id || res.data.data?.version?.id;
+
+      // Upload queued attachments if any
+      if (attachments.length > 0 && newVersionId) {
+        setUploadStatus(`Uploading ${attachments.length} attached SOP file${attachments.length > 1 ? 's' : ''}...`);
+
+        try {
+          const formData = new FormData();
+          attachments.forEach((file) => {
+            formData.append('files', file);
+          });
+          await api.post(`/attachments/versions/${newVersionId}/batch`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          });
+        } catch (batchErr) {
+          // Fallback to sequential uploads if batch route fails
+          for (let i = 0; i < attachments.length; i++) {
+            setUploadStatus(`Uploading file ${i + 1} of ${attachments.length}...`);
+            const singleFormData = new FormData();
+            singleFormData.append('file', attachments[i]);
+            await api.post(`/attachments/versions/${newVersionId}`, singleFormData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+          }
+        }
+      }
+
       navigate(`/sops/${newSopId}`);
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to create Standard Operating Procedure.');
     } finally {
       setSubmitting(false);
+      setUploadStatus(null);
     }
   };
 
@@ -246,12 +388,135 @@ export const SOPCreatePage: React.FC = () => {
           </div>
         </div>
 
+        {/* SOP File Upload & Controlled Attachments Card */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <UploadCloud className="w-4 h-4 text-blue-600" />
+                Controlled SOP Document & File Attachments
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Upload your pre-authored controlled procedure (PDF, Word, or Excel). Files will be securely linked to Version 1.0.
+              </p>
+            </div>
+            {attachments.length > 0 && (
+              <span className="self-start sm:self-auto px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-200">
+                {attachments.length} file{attachments.length === 1 ? '' : 's'} queued
+              </span>
+            )}
+          </div>
+
+          {/* Drag & Drop Zone */}
+          <div
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={() => fileInputRef.current?.click()}
+            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 ${
+              isDragging
+                ? 'border-blue-500 bg-blue-50/70 scale-[0.99]'
+                : 'border-slate-300 hover:border-blue-400 bg-slate-50/50 hover:bg-slate-50'
+            }`}
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.docx,.doc,.xlsx,.xls,.png,.jpg,.jpeg"
+              onChange={(e) => e.target.files && handleFilesSelected(e.target.files)}
+              className="hidden"
+            />
+            <div className={`p-3 rounded-full ${isDragging ? 'bg-blue-200 text-blue-700' : 'bg-blue-100 text-blue-600'}`}>
+              <UploadCloud className="w-6 h-6" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-slate-700">
+                <span className="text-blue-600 hover:underline">Click to browse</span> or drag and drop your SOP files here
+              </p>
+              <p className="text-[11px] text-slate-400 mt-0.5">
+                Supported formats: <strong className="text-slate-600">PDF, DOCX, XLSX, JPG, PNG</strong> (Up to 25 MB each)
+              </p>
+            </div>
+          </div>
+
+          {/* Queued Attachments List */}
+          {attachments.length > 0 && (
+            <div className="space-y-2.5 pt-2">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-semibold text-slate-600">
+                <span>Queued Files ({attachments.length})</span>
+                {(!purpose.trim() || !procedure.trim()) && (
+                  <button
+                    type="button"
+                    onClick={handleAutoPopulateFromDoc}
+                    className="inline-flex items-center gap-1.5 text-blue-600 hover:text-blue-700 hover:underline font-semibold text-left"
+                  >
+                    <Sparkles className="w-3.5 h-3.5" />
+                    <span>Auto-populate text sections from attached document</span>
+                  </button>
+                )}
+              </div>
+
+              <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white">
+                {attachments.map((file, idx) => {
+                  const ext = file.name.split('.').pop()?.toLowerCase();
+                  const isPdf = ext === 'pdf';
+                  const isWord = ext === 'docx' || ext === 'doc';
+                  const isExcel = ext === 'xlsx' || ext === 'xls';
+                  const isImg = ext === 'png' || ext === 'jpg' || ext === 'jpeg';
+
+                  return (
+                    <div key={`${file.name}-${idx}`} className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-slate-50/70 transition-colors">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className={`p-2 rounded-lg flex-shrink-0 ${
+                          isPdf ? 'bg-rose-50 text-rose-600' :
+                          isWord ? 'bg-blue-50 text-blue-600' :
+                          isExcel ? 'bg-emerald-50 text-emerald-600' :
+                          isImg ? 'bg-purple-50 text-purple-600' : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {isPdf || isWord ? <FileText className="w-4 h-4" /> :
+                           isExcel ? <FileSpreadsheet className="w-4 h-4" /> :
+                           isImg ? <ImageIcon className="w-4 h-4" /> : <Paperclip className="w-4 h-4" />}
+                        </div>
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-800 truncate" title={file.name}>{file.name}</p>
+                          <p className="text-[11px] text-slate-400">
+                            {formatFileSize(file.size)} • <span className="text-emerald-600 font-medium">Ready to attach to Draft V1.0</span>
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => removeAttachment(idx)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
+                          title="Remove file"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Document Content Sections */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
-          <h2 className="text-base font-bold text-slate-800 flex items-center gap-2 border-b border-slate-100 pb-3">
-            <FileText className="w-4 h-4 text-blue-600" />
-            Procedure Content (Version 1.0)
-          </h2>
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+            <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+              <FileText className="w-4 h-4 text-blue-600" />
+              Procedure Content (Version 1.0)
+            </h2>
+            {attachments.length > 0 && (
+              <span className="text-[11px] text-slate-400">
+                Sections can reference attached document
+              </span>
+            )}
+          </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
@@ -432,9 +697,16 @@ export const SOPCreatePage: React.FC = () => {
           <button
             type="submit"
             disabled={submitting}
-            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold shadow transition-colors disabled:opacity-50"
+            className="px-6 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-semibold shadow transition-colors disabled:opacity-50 flex items-center gap-2"
           >
-            {submitting ? 'Creating Procedure...' : 'Create Draft Procedure'}
+            {submitting ? (
+              <>
+                <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                <span>{uploadStatus || 'Creating Procedure...'}</span>
+              </>
+            ) : (
+              <span>Create Draft Procedure</span>
+            )}
           </button>
         </div>
       </form>

@@ -191,5 +191,33 @@ describe('Security, Production Isolation, and RBAC Guard Tests', () => {
     expect(userLoginRes.body.success).toBe(true);
     expect(userLoginRes.body.data.user.role).toBe('REVIEWER');
   });
+
+  it('TEST 24: SOP version supports batch file attachment uploads during or after creation', async () => {
+    const adminLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'admin', password: 'DemoPassword123!' });
+
+    const adminToken = adminLogin.body.data.token;
+    const dept = await prisma.department.findFirst();
+
+    // Find any draft version
+    const version = await prisma.sOPVersion.findFirst({
+      where: { isFinalized: false },
+    });
+    expect(version).toBeDefined();
+
+    const batchRes = await request(app)
+      .post(`/api/attachments/versions/${version!.id}/batch`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .attach('files', Buffer.from('%PDF-1.4 official sop doc'), 'sop-doc-test.pdf')
+      .attach('files', Buffer.from('pk\x03\x04 fake docx binary data'), 'procedure-manual.docx');
+
+    expect(batchRes.status).toBe(201);
+    expect(batchRes.body.success).toBe(true);
+    expect(batchRes.body.count).toBe(2);
+    expect(batchRes.body.data.length).toBe(2);
+    expect(batchRes.body.data[0].originalFilename).toBe('sop-doc-test.pdf');
+    expect(batchRes.body.data[1].originalFilename).toBe('procedure-manual.docx');
+  });
 });
 

@@ -47,6 +47,63 @@ export const uploadMiddleware = multer({
   },
 });
 
+export const uploadMultipleMiddleware = uploadMiddleware.array('files', 10);
+
+export async function uploadMultipleAttachments(req: Request, res: Response) {
+  const { versionId } = req.params;
+  const files = (req.files as Express.Multer.File[]) || [];
+
+  if (!files || files.length === 0) {
+    return res.status(400).json({ success: false, message: 'No files uploaded.' });
+  }
+
+  const version = await prisma.sOPVersion.findUnique({ where: { id: versionId } });
+  if (!version) {
+    files.forEach((f) => fs.existsSync(f.path) && fs.unlinkSync(f.path));
+    return res.status(404).json({ success: false, message: 'SOP version not found.' });
+  }
+
+  if (version.isFinalized) {
+    files.forEach((f) => fs.existsSync(f.path) && fs.unlinkSync(f.path));
+    return res.status(400).json({ success: false, message: 'Cannot add attachments to finalized SOP.' });
+  }
+
+  const createdAttachments = [];
+  for (const file of files) {
+    const attachment = await prisma.sOPAttachment.create({
+      data: {
+        sopVersionId: versionId,
+        originalFilename: file.originalname,
+        storedFilename: file.filename,
+        mimeType: file.mimetype,
+        fileSize: file.size,
+        uploadedById: req.user!.id,
+      },
+      include: {
+        uploadedBy: { select: { id: true, fullName: true } },
+      },
+    });
+
+    await logAudit({
+      userId: req.user?.id,
+      action: 'ATTACHMENT_UPLOADED',
+      entity: 'SOPAttachment',
+      entityId: attachment.id,
+      newValue: { filename: attachment.originalFilename, size: attachment.fileSize },
+      ipAddress: req.ip,
+    });
+
+    createdAttachments.push(attachment);
+  }
+
+  return res.status(201).json({
+    success: true,
+    data: createdAttachments,
+    attachments: createdAttachments,
+    count: createdAttachments.length,
+  });
+}
+
 export async function uploadAttachment(req: Request, res: Response) {
   const { versionId } = req.params;
 

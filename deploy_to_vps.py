@@ -116,11 +116,11 @@ def main():
             git config user.name "nkbearljohndelossantos-coder" &&
             git config user.email "earljohndelossantos@nkbmanufacturing.com" &&
             git add -A &&
-            (git commit -m "feat: temporarily remove department description field" || true) &&
+            (git commit -m "feat: add professional SOP file upload capability during SOP creation" || true) &&
             git push origin main
         """)
 
-        # Rebuild docker container with --no-cache to ensure new bundle is generated
+        # Rebuild docker container with --no-cache
         log("Building and recreating nkb_sop_app container...")
         run_ssh_cmd(client, f"""
             cd {REMOTE_APP_DIR} &&

@@ -86,16 +86,19 @@ export interface Department {
 
 export interface SOPAttachment {
   id: string;
-  fileName: string;
+  fileName?: string;
+  originalFilename?: string;
   fileSize: number;
   mimeType: string;
-  filePath: string;
+  filePath?: string;
+  storedFilename?: string;
   createdAt: string;
   uploadedBy?: {
     id: string;
-    firstName: string;
-    lastName: string;
-    email: string;
+    fullName?: string;
+    firstName?: string;
+    lastName?: string;
+    email?: string;
   };
 }
 

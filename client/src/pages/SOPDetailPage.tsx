@@ -1074,18 +1074,17 @@ export const SOPDetailPage: React.FC = () => {
                   <div className="flex items-center gap-2">
                     <Paperclip className="w-4 h-4 text-slate-400" />
                     <div>
-                      <span className="font-semibold text-slate-800 block">{att.fileName}</span>
+                      <span className="font-semibold text-slate-800 block">{att.originalFilename || att.fileName}</span>
                       <span className="text-[11px] text-slate-400">
-                        {(att.fileSize / 1024).toFixed(1)} KB • Uploaded by {att.uploadedBy?.firstName} {att.uploadedBy?.lastName}
+                        {(att.fileSize / 1024).toFixed(1)} KB • Uploaded by {att.uploadedBy?.fullName || `${att.uploadedBy?.firstName || ''} ${att.uploadedBy?.lastName || ''}`.trim() || 'Staff'}
                       </span>
                     </div>
                   </div>
 
                   <div className="flex items-center gap-3">
                     <a
-                      href={`/uploads/${att.filePath.split(/[\\/]/).pop()}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
+                      href={`/api/attachments/${att.id}/download`}
+                      download={att.originalFilename || att.fileName}
                       className="inline-flex items-center gap-1 text-blue-600 font-semibold hover:underline"
                     >
                       <Download className="w-3.5 h-3.5" /> Download
