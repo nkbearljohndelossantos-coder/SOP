@@ -867,10 +867,15 @@ export const SOPDetailPage: React.FC = () => {
           </section>
 
           <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              4. Step-by-Step Procedure
-            </h3>
-            <div className="text-sm text-slate-800 font-mono leading-relaxed whitespace-pre-line bg-slate-900 text-slate-100 p-5 rounded-lg border border-slate-800 overflow-x-auto">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                4. Step-by-Step Procedure
+              </h3>
+              <span className="text-[11px] font-semibold text-slate-400">
+                Official Operational Instructions
+              </span>
+            </div>
+            <div className="text-sm text-slate-900 font-mono leading-relaxed whitespace-pre-line bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm overflow-x-auto selection:bg-blue-100">
               {activeVersion.procedure}
             </div>
           </section>
