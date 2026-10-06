@@ -92,7 +92,9 @@ export const SOPPrintPage: React.FC = () => {
           </tr>
           <tr>
             <td colSpan={2} className="border-2 border-black p-2 bg-gray-50">
-              <strong>Owning Department:</strong> {sop.department.name} ({sop.department.code})
+              <strong>Owning Department:</strong>{' '}
+              {sop.department?.name || (sop as any).ownerDept?.name || 'Department'}{' '}
+              ({sop.department?.code || (sop as any).ownerDept?.code || 'NKB'})
             </td>
             <td className="border-2 border-black p-2 bg-gray-50">
               <strong>Next Review:</strong>{' '}

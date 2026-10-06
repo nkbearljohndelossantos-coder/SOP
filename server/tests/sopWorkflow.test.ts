@@ -25,10 +25,9 @@ beforeAll(async () => {
   // Clean up any existing test records from prior runs
   await prisma.sOP.deleteMany({
     where: {
-      OR: [
-        { sopNumber: { startsWith: 'SOP-TST' } },
-        { sopNumber: { startsWith: 'SOP-CNF' } },
-      ],
+      sopNumber: {
+        notIn: ['SOP-WH-001', 'SOP-QC-001'],
+      },
     },
   });
 
@@ -369,7 +368,7 @@ describe('SOP Lifecycle and Critical Business Rule Tests', () => {
       .post('/api/sops')
       .set('Authorization', `Bearer ${creatorToken}`)
       .send({
-        sopNumber: 'SOP-ALIAS-001',
+        sopNumber: `SOP-ALIAS-${Date.now()}`,
         title: 'Workflow Alias Route Test',
         category: 'Information Technology',
         ownerDeptId: whDeptId,

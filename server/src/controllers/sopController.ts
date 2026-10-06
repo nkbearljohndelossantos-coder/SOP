@@ -158,6 +158,8 @@ export async function listSOPs(req: Request, res: Response) {
 
   const sopsFormatted = sops.map((s) => ({
     ...s,
+    department: s.ownerDept,
+    departmentId: s.ownerDeptId,
     currentVersion: s.versions?.[0] || null,
   }));
 
@@ -280,6 +282,8 @@ export async function getSOP(req: Request, res: Response) {
 
   const sopPayload = {
     ...sop,
+    department: sop.ownerDept,
+    departmentId: sop.ownerDeptId,
     currentVersion: version,
     currentVersionNumber: version.versionNumber,
   };

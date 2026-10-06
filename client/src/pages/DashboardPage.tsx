@@ -247,7 +247,7 @@ export const DashboardPage: React.FC = () => {
                     </Link>
                     <span className="text-xs text-slate-500 flex items-center gap-1.5 mt-1">
                       <Building className="w-3.5 h-3.5 text-slate-400" />
-                      Owner: {sop.department.name}
+                      Owner: {sop.department?.name || (sop as any).ownerDept?.name || 'Department'}
                     </span>
                   </div>
 

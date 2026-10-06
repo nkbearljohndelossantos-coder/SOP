@@ -206,8 +206,20 @@ export async function updateDraft(
     throw new Error('Finalized SOP versions cannot be edited. A new revision must be created.');
   }
 
-  if (version.status !== SOPStatuses.DRAFT && version.status !== SOPStatuses.RETURNED_TO_CREATOR) {
-    throw new Error(`Cannot edit SOP in status '${version.status}'. Only DRAFT or RETURNED_TO_CREATOR can be edited.`);
+  const editableStatuses: string[] = [
+    SOPStatuses.DRAFT,
+    SOPStatuses.REVISION_DRAFT,
+    SOPStatuses.CHANGES_REQUESTED,
+    SOPStatuses.RETURNED_TO_CREATOR,
+    SOPStatuses.INITIAL_REVIEW,
+    SOPStatuses.UNDER_REVIEW,
+    SOPStatuses.DEPARTMENT_DISCUSSION,
+    SOPStatuses.DISCUSSION,
+    SOPStatuses.REMARKS_CONSOLIDATION,
+  ];
+
+  if (!editableStatuses.includes(version.status)) {
+    throw new Error(`Cannot edit SOP in status '${version.status}'. Finalized versions cannot be edited directly.`);
   }
 
   // Optimistic concurrency control

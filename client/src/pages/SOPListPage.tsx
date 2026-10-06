@@ -48,23 +48,25 @@ export const SOPListPage: React.FC = () => {
   const filteredSOPs = sops.filter((sop) => {
     // Search filter
     const q = search.toLowerCase().trim();
+    const deptName = sop.department?.name || (sop as any).ownerDept?.name || '';
     if (
       q &&
       !sop.sopNumber.toLowerCase().includes(q) &&
       !sop.title.toLowerCase().includes(q) &&
-      !sop.department?.name?.toLowerCase().includes(q)
+      !deptName.toLowerCase().includes(q)
     ) {
       return false;
     }
 
     // Department filter
-    if (departmentFilter !== 'ALL' && sop.departmentId !== departmentFilter) {
+    const currentDeptId = sop.departmentId || (sop as any).ownerDeptId;
+    if (departmentFilter !== 'ALL' && currentDeptId !== departmentFilter) {
       return false;
     }
 
     // Status / Tab filter
     if (statusFilter === 'MY_DEPT') {
-      return sop.departmentId === user?.departmentId;
+      return currentDeptId === user?.departmentId;
     }
     if (statusFilter === 'DRAFT') {
       return sop.status === SOPStatuses.DRAFT || sop.status === SOPStatuses.REVISION_DRAFT;
@@ -226,7 +228,7 @@ export const SOPListPage: React.FC = () => {
                     <td className="py-3.5 px-4 text-slate-600">
                       <span className="inline-flex items-center gap-1">
                         <Building className="w-3.5 h-3.5 text-slate-400" />
-                        {sop.department.name}
+                        {sop.department?.name || (sop as any).ownerDept?.name || 'Department'}
                       </span>
                     </td>
                     <td className="py-3.5 px-4 font-mono text-xs text-slate-500">

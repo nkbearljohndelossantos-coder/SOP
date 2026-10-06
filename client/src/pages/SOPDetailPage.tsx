@@ -39,6 +39,7 @@ import {
   AlertCircle,
   Download,
   Trash2,
+  Edit3,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -252,6 +253,23 @@ export const SOPDetailPage: React.FC = () => {
     }
   };
 
+  const openEditDraftModal = () => {
+    if (activeVersion && sop) {
+      setDraftForm({
+        title: activeVersion.title || sop.title,
+        purpose: activeVersion.purpose || '',
+        scope: activeVersion.scope || '',
+        responsibilities: activeVersion.responsibilities || '',
+        procedure: activeVersion.procedure || '',
+        relatedForms: activeVersion.relatedForms || '',
+        references: activeVersion.references || '',
+        effectiveDate: activeVersion.effectiveDate ? activeVersion.effectiveDate.slice(0, 10) : '',
+        reviewDate: activeVersion.reviewDate ? activeVersion.reviewDate.slice(0, 10) : '',
+      });
+    }
+    setShowEditDraftModal(true);
+  };
+
   const handleSaveDraft = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!sop || !activeVersion) return;
@@ -451,8 +469,16 @@ export const SOPDetailPage: React.FC = () => {
   // Can finalize: Admin or Owner Dept Head, when status is PENDING_FINAL_REVIEW or all required approvers have approved
   const canUserFinalize =
     !isFinalized &&
-    (isAdmin || (isDeptHead && user?.departmentId === sop.departmentId)) &&
+    (isAdmin || (isDeptHead && (user?.departmentId === sop?.departmentId || user?.departmentId === (sop as any)?.ownerDeptId))) &&
     (isPendingFinalReview || allRequiredApproved || (isPendingApproval && allRequiredApproved));
+
+  // Can edit draft
+  const isOwner =
+    sop?.createdById === user?.id ||
+    (user?.departmentId && (user.departmentId === sop?.departmentId || user.departmentId === (sop as any)?.ownerDeptId));
+  const canEditDraft =
+    !isFinalized &&
+    (isDraft || isChangesRequested || isAdmin || isOwner);
 
   // Visual Stepper stages
   const workflowStages = [
@@ -542,7 +568,7 @@ export const SOPDetailPage: React.FC = () => {
 
             <div className="flex items-center gap-4 text-xs text-slate-500 mt-2 flex-wrap">
               <span>
-                Owning Dept: <strong className="text-slate-800">{sop.department.name}</strong>
+                Owning Dept: <strong className="text-slate-800">{sop.department?.name || (sop as any).ownerDept?.name || 'Department'}</strong>
               </span>
               <span>•</span>
               <span>
@@ -569,12 +595,14 @@ export const SOPDetailPage: React.FC = () => {
               <span>Print Official SOP</span>
             </a>
 
-            {isDraft && (
+            {canEditDraft && (
               <button
-                onClick={() => setShowEditDraftModal(true)}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-blue-300 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold hover:bg-blue-100 transition-colors"
+                onClick={openEditDraftModal}
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 border border-blue-300 bg-blue-50 text-blue-700 rounded-lg text-xs font-bold hover:bg-blue-100 transition-colors shadow-sm"
+                title="Edit draft procedure content and sections"
               >
-                Edit Draft
+                <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+                <span>Edit Draft</span>
               </button>
             )}
 
@@ -633,6 +661,7 @@ export const SOPDetailPage: React.FC = () => {
           <div className="text-xs text-slate-600">
             <span className="font-semibold text-slate-800">Workflow Action Center: </span>
             {isDraft && 'Ready for multi-department review.'}
+            {isChangesRequested && 'Changes requested. Update draft and re-submit for review.'}
             {isInReview && 'Reviewers are inspecting procedure.'}
             {isInDiscussion && 'Conduct meeting and record discussions.'}
             {isPendingApproval && 'Awaiting formal digital approvals from Required Approvers.'}
@@ -641,12 +670,21 @@ export const SOPDetailPage: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {isDraft && (
+            {canEditDraft && (
+              <button
+                onClick={openEditDraftModal}
+                className="px-3.5 py-2 border border-blue-300 bg-white hover:bg-blue-50 text-blue-700 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-sm transition-colors"
+              >
+                <Edit3 className="w-3.5 h-3.5 text-blue-600" /> Edit Draft
+              </button>
+            )}
+
+            {(isDraft || isChangesRequested) && (
               <button
                 onClick={handleSubmitForReview}
                 className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm"
               >
-                <Send className="w-3.5 h-3.5" /> Submit For Review
+                <Send className="w-3.5 h-3.5" /> {isChangesRequested ? 'Re-Submit For Review' : 'Submit For Review'}
               </button>
             )}
 
@@ -778,15 +816,27 @@ export const SOPDetailPage: React.FC = () => {
               <h2 className="text-base font-bold text-slate-900">Controlled Procedure Specification</h2>
               <p className="text-xs text-slate-500">Document No: {sop.sopNumber} • Version {activeVersion.versionNumber}</p>
             </div>
-            <a
-              href={`/sops/${sop.id}/print`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition-colors"
-            >
-              <Printer className="w-3.5 h-3.5 text-slate-600" />
-              <span>Print Procedure</span>
-            </a>
+            <div className="flex items-center gap-2">
+              {canEditDraft && (
+                <button
+                  onClick={openEditDraftModal}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition-colors shadow-sm"
+                  title="Edit draft procedure content and sections"
+                >
+                  <Edit3 className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Edit Draft</span>
+                </button>
+              )}
+              <a
+                href={`/sops/${sop.id}/print`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition-colors"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Print Procedure</span>
+              </a>
+            </div>
           </div>
 
           <section>
@@ -894,7 +944,7 @@ export const SOPDetailPage: React.FC = () => {
                   return (
                     <tr key={p.id} className={`hover:bg-slate-50/50 ${isMyDept ? 'bg-blue-50/30' : ''}`}>
                       <td className="py-3.5 px-4 font-semibold text-slate-800">
-                        {p.department.name} <span className="font-mono text-slate-400 font-normal">({p.department.code})</span>
+                        {p.department?.name || 'Department'} <span className="font-mono text-slate-400 font-normal">({p.department?.code || ''})</span>
                         {isMyDept && (
                           <span className="ml-2 text-[10px] font-bold text-blue-700 bg-blue-100 px-1.5 py-0.5 rounded">
                             Your Dept
@@ -1054,7 +1104,7 @@ export const SOPDetailPage: React.FC = () => {
                 <div key={r.id} className="p-4 rounded-xl border border-slate-200 bg-white space-y-2 shadow-sm">
                   <div className="flex items-center justify-between text-xs">
                     <div className="flex items-center gap-2">
-                      <span className="font-bold text-slate-900">{r.department.name}</span>
+                      <span className="font-bold text-slate-900">{r.department?.name || 'Department'}</span>
                       {r.stepReference && (
                         <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 font-mono text-[10px]">
                           Ref: {r.stepReference}
@@ -1399,7 +1449,7 @@ export const SOPDetailPage: React.FC = () => {
             <strong>
               {activeVersion.participants?.find(
                 (p) => p.departmentId === (selectedApprovalDeptId || user?.departmentId)
-              )?.department.name ||
+              )?.department?.name ||
                 user?.department?.name ||
                 'Authorized Department'}
             </strong>
@@ -1418,7 +1468,7 @@ export const SOPDetailPage: React.FC = () => {
               >
                 {pendingApproverParticipants.map((p) => (
                   <option key={p.departmentId} value={p.departmentId}>
-                    {p.department.name} ({p.department.code})
+                    {p.department?.name || 'Department'} ({p.department?.code || ''})
                   </option>
                 ))}
               </select>
@@ -1472,7 +1522,7 @@ export const SOPDetailPage: React.FC = () => {
               >
                 {pendingApproverParticipants.map((p) => (
                   <option key={p.departmentId} value={p.departmentId}>
-                    {p.department.name} ({p.department.code})
+                    {p.department?.name || 'Department'} ({p.department?.code || ''})
                   </option>
                 ))}
               </select>
