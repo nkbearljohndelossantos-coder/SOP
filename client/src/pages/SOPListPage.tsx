@@ -12,6 +12,7 @@ import {
   Printer,
   ChevronRight,
   ExternalLink,
+  Sparkles,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -124,13 +125,23 @@ export const SOPListPage: React.FC = () => {
           </button>
 
           {canCreateSOP && (
-            <Link
-              to="/sops/create"
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
-            >
-              <FilePlus className="w-4 h-4" />
-              <span>Create Procedure</span>
-            </Link>
+            <div className="flex items-center gap-2">
+              <Link
+                to="/sops/create?import=true"
+                className="inline-flex items-center gap-2 px-3.5 py-2 bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 rounded-lg text-xs font-semibold shadow-sm transition-colors"
+                title="Upload Word (.docx) or PDF to auto-fill a new SOP"
+              >
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                <span>Upload / Import SOP</span>
+              </Link>
+              <Link
+                to="/sops/create"
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors"
+              >
+                <FilePlus className="w-4 h-4" />
+                <span>Create Procedure</span>
+              </Link>
+            </div>
           )}
         </div>
       </div>

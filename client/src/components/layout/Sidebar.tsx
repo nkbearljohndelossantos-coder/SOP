@@ -9,6 +9,7 @@ import {
   Users,
   ShieldCheck,
   BarChart3,
+  Sparkles,
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -17,7 +18,12 @@ export const Sidebar: React.FC = () => {
   const navItems = [
     { to: '/', label: 'Dashboard', icon: LayoutDashboard, end: true },
     { to: '/sops', label: 'All SOPs', icon: FileText, end: true },
-    ...(canCreateSOP ? [{ to: '/sops/create', label: 'Create SOP', icon: FilePlus2, end: true }] : []),
+    ...(canCreateSOP
+      ? [
+          { to: '/sops/create', label: 'Create SOP', icon: FilePlus2, end: true },
+          { to: '/sops/create?import=true', label: 'Upload / Import SOP', icon: Sparkles, end: false },
+        ]
+      : []),
     { to: '/departments', label: 'Departments', icon: Building2, end: true },
     ...(isAdmin ? [{ to: '/users', label: 'User Directory', icon: Users, end: true }] : []),
     ...(isAdmin ? [{ to: '/audit-logs', label: 'Audit Trail', icon: ShieldCheck, end: true }] : []),

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import api from '../services/api';
 import { Department, ParticipationTypes, ParticipationType } from '../types';
 import {
@@ -25,6 +25,7 @@ import {
 
 export const SOPCreatePage: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const smartImportInputRef = useRef<HTMLInputElement | null>(null);
   const [departments, setDepartments] = useState<Department[]>([]);
@@ -93,6 +94,15 @@ export const SOPCreatePage: React.FC = () => {
     };
     fetchDepartments();
   }, []);
+
+  useEffect(() => {
+    if (!loading && searchParams.get('import') === 'true') {
+      const timer = setTimeout(() => {
+        smartImportInputRef.current?.click();
+      }, 200);
+      return () => clearTimeout(timer);
+    }
+  }, [loading, searchParams]);
 
   const handleOwnerChange = (newDeptId: string) => {
     setDepartmentId(newDeptId);
