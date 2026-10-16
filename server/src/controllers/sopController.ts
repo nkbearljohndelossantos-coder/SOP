@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../prisma/client';
@@ -95,6 +96,16 @@ const revisionSchema = z.object({
     .optional(),
 });
 
+function withSplitName<T extends { fullName?: string | null } | null | undefined>(user: T): any {
+  if (!user) return user;
+  const parts = (user.fullName || '').trim().split(/\s+/);
+  return {
+    ...user,
+    firstName: parts[0] || '',
+    lastName: parts.slice(1).join(' ') || '',
+  };
+}
+
 export async function listSOPs(req: Request, res: Response) {
   const page = Math.max(1, parseInt(req.query.page as string) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string) || 20));
@@ -158,6 +169,7 @@ export async function listSOPs(req: Request, res: Response) {
 
   const sopsFormatted = sops.map((s) => ({
     ...s,
+    createdBy: withSplitName(s.createdBy),
     department: s.ownerDept,
     departmentId: s.ownerDeptId,
     currentVersion: s.versions?.[0] || null,
@@ -199,6 +211,8 @@ export async function getSOP(req: Request, res: Response) {
           revisionReason: true,
           changeSummary: true,
           isFinalized: true,
+          finalizedAt: true,
+          finalizedBy: { select: { id: true, fullName: true } },
           createdAt: true,
           createdBy: { select: { id: true, fullName: true } },
         },
@@ -280,22 +294,60 @@ export async function getSOP(req: Request, res: Response) {
 
   const matrix = await calculateApprovalMatrix(version.id);
 
+  const enrichedVersion = {
+    ...version,
+    createdBy: withSplitName(version.createdBy),
+    finalizedBy: withSplitName(version.finalizedBy),
+    participants: version.participants.map((p) => ({
+      ...p,
+      decisionUser: withSplitName(p.decisionUser),
+    })),
+    approvals: version.approvals.map((a) => ({
+      ...a,
+      approverUser: withSplitName(a.approverUser),
+      signatureToken: crypto
+        .createHash('sha256')
+        .update(`${a.id}:${a.sopVersionId}:${a.departmentId}:${a.approverUserId}:${a.decision}`)
+        .digest('hex')
+        .slice(0, 32)
+        .toUpperCase(),
+    })),
+    meetings: version.reviewMeetings.map((m) => ({
+      ...m,
+      meetingMode: 'Inter-Department Review',
+      attendees: 'Department Representatives',
+      minutesOfMeeting: m.agenda,
+      decisions: m.recommendations || m.concerns || 'Recorded in review log.',
+      recordedBy: withSplitName(m.createdBy),
+    })),
+    attachments: version.attachments.map((att) => ({
+      ...att,
+      uploadedBy: withSplitName(att.uploadedBy),
+    })),
+  };
+
   const sopPayload = {
     ...sop,
+    createdBy: withSplitName(sop.createdBy),
+    versions: sop.versions.map((v) => ({
+      ...v,
+      createdBy: withSplitName(v.createdBy),
+      finalizedBy: withSplitName((v as any).finalizedBy),
+    })),
     department: sop.ownerDept,
     departmentId: sop.ownerDeptId,
-    currentVersion: version,
-    currentVersionNumber: version.versionNumber,
+    currentVersion: enrichedVersion,
+    currentVersionNumber: enrichedVersion.versionNumber,
   };
 
   return res.json({
     success: true,
     sop: sopPayload,
-    currentVersion: version,
+    currentVersion: enrichedVersion,
     matrix,
     data: {
       sop: sopPayload,
-      currentVersion: version,
+      currentVersion: enrichedVersion,
       matrix,
     },
   });

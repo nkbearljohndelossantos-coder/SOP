@@ -177,6 +177,16 @@ export async function createUser(req: Request, res: Response) {
     include: { department: true },
   });
 
+  if (user.role === Roles.DEPARTMENT_HEAD && user.departmentId) {
+    const dept = await prisma.department.findUnique({ where: { id: user.departmentId } });
+    if (dept && !dept.headUserId) {
+      await prisma.department.update({
+        where: { id: user.departmentId },
+        data: { headUserId: user.id },
+      });
+    }
+  }
+
   await logAudit({
     userId: req.user?.id,
     action: 'USER_CREATED',
@@ -219,6 +229,16 @@ export async function updateUser(req: Request, res: Response) {
     data: updatePayload,
     include: { department: true },
   });
+
+  if (updated.role === Roles.DEPARTMENT_HEAD && updated.departmentId) {
+    const dept = await prisma.department.findUnique({ where: { id: updated.departmentId } });
+    if (dept && !dept.headUserId) {
+      await prisma.department.update({
+        where: { id: updated.departmentId },
+        data: { headUserId: updated.id },
+      });
+    }
+  }
 
   await logAudit({
     userId: req.user?.id,

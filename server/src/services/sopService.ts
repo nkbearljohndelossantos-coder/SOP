@@ -370,7 +370,7 @@ export async function calculateApprovalMatrix(versionId: string) {
     hasBlockingChangesRequested,
     pendingApproverDeptNames,
     pendingReviewerDeptNames,
-    canFinalize: allRequiredApproved && allRequiredReviewsCompleted && !hasBlockingChangesRequested,
+    canFinalize: allRequiredApproved && !hasBlockingChangesRequested,
   };
 }
 

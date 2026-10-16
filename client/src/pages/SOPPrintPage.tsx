@@ -186,7 +186,9 @@ export const SOPPrintPage: React.FC = () => {
                         {p.decisionUser ? (
                           <div>
                             <span className="font-bold">
-                              {p.decisionUser.firstName} {p.decisionUser.lastName}
+                              {(p.decisionUser as any).fullName ||
+                                `${p.decisionUser.firstName || ''} ${p.decisionUser.lastName || ''}`.trim() ||
+                                'Authorized Signatory'}
                             </span>
                             <span className="block text-gray-600 font-semibold">
                               [{p.status}]

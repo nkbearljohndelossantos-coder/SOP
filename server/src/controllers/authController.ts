@@ -44,7 +44,13 @@ export async function login(req: Request, res: Response) {
         { email: lowerId },
       ],
     },
-    include: { department: true },
+    include: {
+      department: true,
+      headedDepartment: true,
+      representativeOf: {
+        include: { department: true },
+      },
+    },
   });
 
   if (!user || !user.isActive) {
@@ -107,6 +113,8 @@ export async function login(req: Request, res: Response) {
     position: user.position,
     departmentId: user.departmentId,
     department: user.department ? { id: user.department.id, name: user.department.name, code: user.department.code } : null,
+    headedDepartment: user.headedDepartment ? { id: user.headedDepartment.id, name: user.headedDepartment.name, code: user.headedDepartment.code } : null,
+    representativeDepartments: user.representativeOf.map((r) => ({ id: r.department.id, name: r.department.name, code: r.department.code })),
     isDemoUser: user.isDemoUser,
   };
 
@@ -506,6 +514,16 @@ export async function registerWithInvite(req: Request, res: Response) {
         usedByUserId: newUser.id,
       },
     });
+
+    if (invite.role === Roles.DEPARTMENT_HEAD && invite.departmentId) {
+      const dept = await tx.department.findUnique({ where: { id: invite.departmentId } });
+      if (dept && !dept.headUserId) {
+        await tx.department.update({
+          where: { id: invite.departmentId },
+          data: { headUserId: newUser.id },
+        });
+      }
+    }
 
     return newUser;
   });

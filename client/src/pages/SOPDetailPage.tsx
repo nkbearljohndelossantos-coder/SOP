@@ -56,6 +56,8 @@ export const SOPDetailPage: React.FC = () => {
   >('content');
 
   const [error, setError] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [submittingApproval, setSubmittingApproval] = useState(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
   // Modals
@@ -188,13 +190,17 @@ export const SOPDetailPage: React.FC = () => {
   };
 
   const handleApprove = async () => {
-    if (!activeVersion) return;
-    const deptId = selectedApprovalDeptId || user?.departmentId;
+    if (!activeVersion || submittingApproval) return;
+    setModalError(null);
+    const deptId = selectedApprovalDeptId || (user as any)?.headedDepartment?.id || user?.departmentId;
     if (!deptId) {
-      setError('Please select an authorized department to register approval.');
+      const msg = 'Please select an authorized department to register approval.';
+      setModalError(msg);
+      setError(msg);
       return;
     }
     try {
+      setSubmittingApproval(true);
       // Auto-confirm agreement if pending so approval is seamless and compliant
       const participant = activeVersion.participants?.find((p) => p.departmentId === deptId);
       if (participant && !participant.agreementConfirmed) {
@@ -205,37 +211,53 @@ export const SOPDetailPage: React.FC = () => {
         departmentId: deptId,
         decision: 'APPROVED',
       });
-      setShowApproveModal(false);
-      showNotification('Department approval formally registered with digital signature token.');
       await fetchSOP();
+      setShowApproveModal(false);
+      setModalError(null);
+      showNotification('Department approval formally registered with digital signature token.');
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to register approval.');
+      const msg = err.response?.data?.message || 'Failed to register approval.';
+      setModalError(msg);
+      setError(msg);
+    } finally {
+      setSubmittingApproval(false);
     }
   };
 
   const handleRejectOrRequestChanges = async () => {
-    if (!activeVersion) return;
-    const deptId = selectedApprovalDeptId || user?.departmentId;
+    if (!activeVersion || submittingApproval) return;
+    setModalError(null);
+    const deptId = selectedApprovalDeptId || (user as any)?.headedDepartment?.id || user?.departmentId;
     if (!deptId) {
-      setError('Please select a department.');
+      const msg = 'Please select a department.';
+      setModalError(msg);
+      setError(msg);
       return;
     }
-    if (!rejectReason.trim()) {
-      setError('A detailed reason is strictly required when requesting changes or rejecting.');
+    if (!rejectReason.trim() || rejectReason.trim().length < 5) {
+      const msg = 'A detailed reason (at least 5 characters) is strictly required when requesting changes or rejecting.';
+      setModalError(msg);
+      setError(msg);
       return;
     }
     try {
+      setSubmittingApproval(true);
       await api.post(`/workflow/versions/${activeVersion.id}/request-changes`, {
         departmentId: deptId,
         reason: rejectReason.trim(),
         decision: 'CHANGES_REQUESTED',
       });
+      await fetchSOP();
       setShowRejectModal(false);
       setRejectReason('');
+      setModalError(null);
       showNotification('Changes requested. Procedure returned to author.');
-      await fetchSOP();
     } catch (err: any) {
-      setError(err.response?.data?.message || 'Failed to request changes.');
+      const msg = err.response?.data?.message || 'Failed to request changes.';
+      setModalError(msg);
+      setError(msg);
+    } finally {
+      setSubmittingApproval(false);
     }
   };
 
@@ -436,8 +458,34 @@ export const SOPDetailPage: React.FC = () => {
     activeVersion.status === SOPStatuses.UNDER_REVIEW ||
     activeVersion.status === SOPStatuses.INITIAL_REVIEW;
 
+  // Helper: Can the current user act on behalf of a specific department?
+  const canUserActForDept = (deptId: string, participant?: any): boolean => {
+    if (!user || !deptId) return false;
+    if (isAdmin) return true;
+    const deptHeadId = (participant?.department as any)?.head?.id || (participant?.department as any)?.headUserId;
+    if (deptHeadId && deptHeadId === user.id) return true;
+    if ((user as any)?.headedDepartment?.id === deptId) return true;
+    const reps = (participant?.department as any)?.representatives;
+    if (Array.isArray(reps) && reps.some((r: any) => r?.user?.id === user.id || r?.userId === user.id)) {
+      return true;
+    }
+    const userRepDepts = (user as any)?.representativeDepartments;
+    if (Array.isArray(userRepDepts) && userRepDepts.some((d: any) => d?.id === deptId)) {
+      return true;
+    }
+    if (
+      user.departmentId === deptId &&
+      ['DEPARTMENT_HEAD', 'DEPARTMENT_REPRESENTATIVE', 'APPROVER'].includes(user.role || '')
+    ) {
+      return true;
+    }
+    return false;
+  };
+
+  const userPrimaryDeptId = (user as any)?.headedDepartment?.id || user?.departmentId || '';
+
   // Participant checks for the current logged-in user's department
-  const myParticipant = activeVersion.participants?.find((p) => p.departmentId === user?.departmentId);
+  const myParticipant = activeVersion.participants?.find((p) => p.departmentId === userPrimaryDeptId);
   const isMyDeptRequiredApprover = myParticipant?.participationType === ParticipationTypes.REQUIRED_APPROVER;
   const isMyDeptRequiredReviewer = myParticipant?.participationType === ParticipationTypes.REQUIRED_REVIEWER;
   const hasMyDeptAgreed = myParticipant?.agreementConfirmed;
@@ -448,34 +496,56 @@ export const SOPDetailPage: React.FC = () => {
     (p) => p.participationType === ParticipationTypes.REQUIRED_APPROVER
   ) || [];
   const pendingApproverParticipants = requiredApprovers.filter((p) => p.status !== 'APPROVED');
+  const authorizedPendingApproverParticipants = pendingApproverParticipants.filter((p) =>
+    canUserActForDept(p.departmentId, p)
+  );
   const allRequiredApproved =
     requiredApprovers.length > 0 && requiredApprovers.every((p) => p.status === 'APPROVED');
+
+  const getDefaultApprovalDeptId = (): string => {
+    if (
+      userPrimaryDeptId &&
+      authorizedPendingApproverParticipants.some((p) => p.departmentId === userPrimaryDeptId)
+    ) {
+      return userPrimaryDeptId;
+    }
+    if (authorizedPendingApproverParticipants[0]) {
+      return authorizedPendingApproverParticipants[0].departmentId;
+    }
+    if (pendingApproverParticipants[0]) {
+      return pendingApproverParticipants[0].departmentId;
+    }
+    return userPrimaryDeptId;
+  };
 
   // Can the current user perform approval?
   const canUserApproveForMyDept =
     !isFinalized &&
-    ((isAdmin && pendingApproverParticipants.length > 0) ||
-      (isDeptHead && isMyDeptRequiredApprover && !hasMyDeptApproved));
+    !isDraft &&
+    authorizedPendingApproverParticipants.length > 0;
 
   // Can the user confirm agreement?
   const canUserConfirmAgreement =
     !isFinalized &&
     (isAdmin ||
-      ((isDeptHead || user?.role === 'DEPARTMENT_REPRESENTATIVE') &&
-        myParticipant &&
+      (myParticipant &&
         myParticipant.participationType !== ParticipationTypes.NOT_INVOLVED &&
-        !hasMyDeptAgreed));
+        !hasMyDeptAgreed &&
+        canUserActForDept(myParticipant.departmentId, myParticipant)));
 
-  // Can finalize: Admin or Owner Dept Head, when status is PENDING_FINAL_REVIEW or all required approvers have approved
+  // Can finalize: Admin, SOP Creator, or Owner Dept Head when status is PENDING_FINAL_REVIEW or all required approvers have approved
+  const ownerDeptId = sop?.departmentId || (sop as any)?.ownerDeptId;
   const canUserFinalize =
     !isFinalized &&
-    (isAdmin || (isDeptHead && (user?.departmentId === sop?.departmentId || user?.departmentId === (sop as any)?.ownerDeptId))) &&
+    (isAdmin ||
+      sop?.createdById === user?.id ||
+      (ownerDeptId ? canUserActForDept(ownerDeptId) : false)) &&
     (isPendingFinalReview || allRequiredApproved || (isPendingApproval && allRequiredApproved));
 
   // Can edit draft
   const isOwner =
     sop?.createdById === user?.id ||
-    (user?.departmentId && (user.departmentId === sop?.departmentId || user.departmentId === (sop as any)?.ownerDeptId));
+    Boolean(userPrimaryDeptId && userPrimaryDeptId === ownerDeptId);
   const canEditDraft =
     !isFinalized &&
     (isDraft || isChangesRequested || isAdmin || isOwner);
@@ -574,7 +644,7 @@ export const SOPDetailPage: React.FC = () => {
               <span>
                 Authored by:{' '}
                 <strong className="text-slate-800">
-                  {sop.createdBy.firstName} {sop.createdBy.lastName}
+                  {(sop.createdBy as any)?.fullName || `${sop.createdBy?.firstName || ''} ${sop.createdBy?.lastName || ''}`.trim()}
                 </strong>
               </span>
               <span>•</span>
@@ -709,11 +779,8 @@ export const SOPDetailPage: React.FC = () => {
             {canUserApproveForMyDept && (
               <button
                 onClick={() => {
-                  if (user?.departmentId) {
-                    setSelectedApprovalDeptId(user.departmentId);
-                  } else if (pendingApproverParticipants[0]) {
-                    setSelectedApprovalDeptId(pendingApproverParticipants[0].departmentId);
-                  }
+                  setModalError(null);
+                  setSelectedApprovalDeptId(getDefaultApprovalDeptId());
                   setShowApproveModal(true);
                 }}
                 className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm"
@@ -722,14 +789,11 @@ export const SOPDetailPage: React.FC = () => {
               </button>
             )}
 
-            {(isPendingApproval || isInDiscussion) && (isDeptHead || isAdmin) && (
+            {!isFinalized && !isDraft && authorizedPendingApproverParticipants.length > 0 && (
               <button
                 onClick={() => {
-                  if (user?.departmentId) {
-                    setSelectedApprovalDeptId(user.departmentId);
-                  } else if (pendingApproverParticipants[0]) {
-                    setSelectedApprovalDeptId(pendingApproverParticipants[0].departmentId);
-                  }
+                  setModalError(null);
+                  setSelectedApprovalDeptId(getDefaultApprovalDeptId());
                   setShowRejectModal(true);
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-sm"
@@ -933,18 +997,21 @@ export const SOPDetailPage: React.FC = () => {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {activeVersion.participants?.map((p) => {
-                  const isMyDept = p.departmentId === user?.departmentId;
+                  const isMyDept =
+                    p.departmentId === user?.departmentId ||
+                    p.departmentId === (user as any)?.headedDepartment?.id;
                   const canConfirmThisDept =
-                    (isAdmin || ((isDeptHead || user?.role === 'DEPARTMENT_REPRESENTATIVE') && isMyDept)) &&
+                    !isFinalized &&
                     p.participationType !== ParticipationTypes.NOT_INVOLVED &&
                     !p.agreementConfirmed &&
-                    !isFinalized;
+                    canUserActForDept(p.departmentId, p);
 
                   const canSignOffThisDept =
                     !isFinalized &&
+                    !isDraft &&
                     p.participationType === ParticipationTypes.REQUIRED_APPROVER &&
                     p.status !== 'APPROVED' &&
-                    (isAdmin || (isDeptHead && isMyDept));
+                    canUserActForDept(p.departmentId, p);
 
                   return (
                     <tr key={p.id} className={`hover:bg-slate-50/50 ${isMyDept ? 'bg-blue-50/30' : ''}`}>
@@ -982,7 +1049,9 @@ export const SOPDetailPage: React.FC = () => {
                         {p.decisionUser ? (
                           <div>
                             <span className="font-semibold text-slate-800 block">
-                              {p.decisionUser.firstName} {p.decisionUser.lastName}
+                              {(p.decisionUser as any).fullName ||
+                                `${p.decisionUser.firstName || ''} ${p.decisionUser.lastName || ''}`.trim() ||
+                                'Authorized Signatory'}
                             </span>
                             {p.decisionAt && (
                               <span className="text-[10px] text-slate-400">
@@ -1008,6 +1077,7 @@ export const SOPDetailPage: React.FC = () => {
                         {canSignOffThisDept && (
                           <button
                             onClick={() => {
+                              setModalError(null);
                               setSelectedApprovalDeptId(p.departmentId);
                               setShowApproveModal(true);
                             }}
@@ -1444,41 +1514,58 @@ export const SOPDetailPage: React.FC = () => {
       {/* MODAL: Formal Approval */}
       <Modal
         isOpen={showApproveModal}
-        onClose={() => setShowApproveModal(false)}
+        onClose={() => {
+          if (!submittingApproval) {
+            setShowApproveModal(false);
+            setModalError(null);
+          }
+        }}
         title="Grant Formal Department Approval"
       >
         <div className="space-y-4 text-xs">
+          {modalError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <span>{modalError}</span>
+            </div>
+          )}
+
           <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-900 rounded-lg">
             <strong className="block font-bold">Official Department Sign-Off</strong>
             You are approving on behalf of{' '}
             <strong>
               {activeVersion.participants?.find(
-                (p) => p.departmentId === (selectedApprovalDeptId || user?.departmentId)
+                (p) => p.departmentId === (selectedApprovalDeptId || userPrimaryDeptId)
               )?.department?.name ||
+                (user as any)?.headedDepartment?.name ||
                 user?.department?.name ||
                 'Authorized Department'}
             </strong>
             . A cryptographic SHA-256 digital signature token will be generated and bound to this approval in the immutable audit trail.
           </div>
 
-          {(isAdmin || !user?.departmentId) && pendingApproverParticipants.length > 0 && (
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                Select Department for Sign-Off *
-              </label>
-              <select
-                value={selectedApprovalDeptId}
-                onChange={(e) => setSelectedApprovalDeptId(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-              >
-                {pendingApproverParticipants.map((p) => (
-                  <option key={p.departmentId} value={p.departmentId}>
-                    {p.department?.name || 'Department'} ({p.department?.code || ''})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          {(isAdmin || !userPrimaryDeptId || authorizedPendingApproverParticipants.length > 1) &&
+            authorizedPendingApproverParticipants.length > 0 && (
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Select Department for Sign-Off *
+                </label>
+                <select
+                  value={selectedApprovalDeptId}
+                  onChange={(e) => {
+                    setSelectedApprovalDeptId(e.target.value);
+                    setModalError(null);
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
+                >
+                  {authorizedPendingApproverParticipants.map((p) => (
+                    <option key={p.departmentId} value={p.departmentId}>
+                      {p.department?.name || 'Department'} ({p.department?.code || ''})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
           <p className="text-slate-600">
             By clicking "Confirm Formal Approval", you certify that your department has reviewed the procedure, completed discussions, and accepts full operational compliance with this Standard Operating Procedure.
@@ -1487,17 +1574,22 @@ export const SOPDetailPage: React.FC = () => {
           <div className="flex justify-end gap-2 pt-3">
             <button
               type="button"
-              onClick={() => setShowApproveModal(false)}
-              className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-slate-700"
+              disabled={submittingApproval}
+              onClick={() => {
+                setShowApproveModal(false);
+                setModalError(null);
+              }}
+              className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-slate-700 disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="button"
+              disabled={submittingApproval}
               onClick={handleApprove}
-              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow"
+              className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-bold shadow disabled:opacity-50"
             >
-              Confirm Formal Approval
+              {submittingApproval ? 'Submitting Approval...' : 'Confirm Formal Approval'}
             </button>
           </div>
         </div>
@@ -1506,33 +1598,49 @@ export const SOPDetailPage: React.FC = () => {
       {/* MODAL: Request Changes / Rejection */}
       <Modal
         isOpen={showRejectModal}
-        onClose={() => setShowRejectModal(false)}
+        onClose={() => {
+          if (!submittingApproval) {
+            setShowRejectModal(false);
+            setModalError(null);
+          }
+        }}
         title="Request Changes or Reject Version"
       >
         <div className="space-y-4 text-xs">
+          {modalError && (
+            <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0 mt-0.5" />
+              <span>{modalError}</span>
+            </div>
+          )}
+
           <div className="p-3 bg-rose-50 border border-rose-200 text-rose-900 rounded-lg">
             <strong className="block font-bold">Mandatory Justification Required</strong>
             Requesting changes will return this procedure to the authoring team. You must enter a clear, specific justification.
           </div>
 
-          {(isAdmin || !user?.departmentId) && pendingApproverParticipants.length > 0 && (
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">
-                Select Department for Rejection / Change Request *
-              </label>
-              <select
-                value={selectedApprovalDeptId}
-                onChange={(e) => setSelectedApprovalDeptId(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-              >
-                {pendingApproverParticipants.map((p) => (
-                  <option key={p.departmentId} value={p.departmentId}>
-                    {p.department?.name || 'Department'} ({p.department?.code || ''})
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
+          {(isAdmin || !userPrimaryDeptId || authorizedPendingApproverParticipants.length > 1) &&
+            authorizedPendingApproverParticipants.length > 0 && (
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Select Department for Rejection / Change Request *
+                </label>
+                <select
+                  value={selectedApprovalDeptId}
+                  onChange={(e) => {
+                    setSelectedApprovalDeptId(e.target.value);
+                    setModalError(null);
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
+                >
+                  {authorizedPendingApproverParticipants.map((p) => (
+                    <option key={p.departmentId} value={p.departmentId}>
+                      {p.department?.name || 'Department'} ({p.department?.code || ''})
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
           <div>
             <label className="block font-semibold text-slate-700 mb-1">
@@ -1551,17 +1659,22 @@ export const SOPDetailPage: React.FC = () => {
           <div className="flex justify-end gap-2 pt-2">
             <button
               type="button"
-              onClick={() => setShowRejectModal(false)}
-              className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-slate-700"
+              disabled={submittingApproval}
+              onClick={() => {
+                setShowRejectModal(false);
+                setModalError(null);
+              }}
+              className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-slate-700 disabled:opacity-50"
             >
               Cancel
             </button>
             <button
               type="button"
+              disabled={submittingApproval}
               onClick={handleRejectOrRequestChanges}
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold"
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold disabled:opacity-50"
             >
-              Submit Change Request
+              {submittingApproval ? 'Submitting...' : 'Submit Change Request'}
             </button>
           </div>
         </div>

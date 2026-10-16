@@ -447,4 +447,148 @@ describe('SOP Lifecycle and Critical Business Rule Tests', () => {
       .set('Authorization', `Bearer ${adminToken}`);
     expect(postRes.status).toBe(200);
   });
+
+  it('TEST 27-31: ADMIN role, DEPARTMENT_HEAD by departmentId, and designated Department Head can approve, duplicate approval is blocked, and getSOP returns approver identity & signatureToken', async () => {
+    // 1. Create an ADMIN user (not SUPER_ADMIN) and a designated head with SOP_CREATOR role
+    const bcrypt = await import('bcryptjs');
+    const hash = await bcrypt.default.hash('TestPass123!', 10);
+
+    const adminRoleUser = await prisma.user.upsert({
+      where: { username: 'test_admin_role' },
+      update: { role: 'ADMIN', departmentId: whDeptId, isActive: true },
+      create: {
+        employeeId: 'EMP-TST-ADM',
+        username: 'test_admin_role',
+        fullName: 'Kem Mariel TestAdmin',
+        email: 'test_admin_role@nkb.local',
+        passwordHash: hash,
+        role: 'ADMIN',
+        departmentId: whDeptId,
+        isActive: true,
+      },
+    });
+
+    const creatorDeptHeadUser = await prisma.user.upsert({
+      where: { username: 'test_creator_head' },
+      update: { role: 'SOP_CREATOR', departmentId: qcDeptId, isActive: true },
+      create: {
+        employeeId: 'EMP-TST-CHD',
+        username: 'test_creator_head',
+        fullName: 'Angelita TestHead',
+        email: 'test_creator_head@nkb.local',
+        passwordHash: hash,
+        role: 'SOP_CREATOR',
+        departmentId: qcDeptId,
+        isActive: true,
+      },
+    });
+
+    // Assign creatorDeptHeadUser as head of QC temporarily
+    const origQcDept = await prisma.department.findUnique({ where: { id: qcDeptId } });
+    await prisma.department.update({
+      where: { id: qcDeptId },
+      data: { headUserId: creatorDeptHeadUser.id },
+    });
+
+    const adminRoleLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'test_admin_role', password: 'TestPass123!' });
+    expect(adminRoleLogin.status).toBe(200);
+    const adminRoleToken = adminRoleLogin.body.token;
+
+    const creatorHeadLogin = await request(app)
+      .post('/api/auth/login')
+      .send({ username: 'test_creator_head', password: 'TestPass123!' });
+    expect(creatorHeadLogin.status).toBe(200);
+    expect(creatorHeadLogin.body.user.headedDepartment?.id).toBe(qcDeptId);
+    const creatorHeadToken = creatorHeadLogin.body.token;
+
+    // Create a new SOP requiring WH and QC approvals, plus PUR as REQUIRED_REVIEWER
+    const sopRes = await request(app)
+      .post('/api/sops')
+      .set('Authorization', `Bearer ${adminRoleToken}`)
+      .send({
+        sopNumber: `SOP-APR-${Date.now()}`,
+        title: 'Approval Verification Procedure',
+        category: 'Quality Assurance',
+        ownerDeptId: whDeptId,
+        purpose: 'Verify end-to-end approval permissions and database updates.',
+        scope: 'All manufacturing and quality departments.',
+        responsibilities: 'Department Heads and Administrators.',
+        procedure: '1. Submit SOP.\n2. Confirm agreement.\n3. Grant formal approval.',
+        participants: [
+          { departmentId: whDeptId, participationType: ParticipationTypes.REQUIRED_APPROVER },
+          { departmentId: qcDeptId, participationType: ParticipationTypes.REQUIRED_APPROVER },
+          { departmentId: purDeptId, participationType: ParticipationTypes.REQUIRED_REVIEWER },
+        ],
+      });
+    expect(sopRes.status).toBe(201);
+    const testSopId = sopRes.body.sop.id;
+    const testVerId = sopRes.body.version.id;
+
+    // Submit for review as ADMIN role user
+    const subRes = await request(app)
+      .post(`/api/workflow/versions/${testVerId}/submit`)
+      .set('Authorization', `Bearer ${adminRoleToken}`);
+    expect(subRes.status).toBe(200);
+
+    // ADMIN role confirms agreement and approves for WH
+    const admAgree = await request(app)
+      .post(`/api/workflow/versions/${testVerId}/confirm-agreement`)
+      .set('Authorization', `Bearer ${adminRoleToken}`)
+      .send({ departmentId: whDeptId });
+    expect(admAgree.status).toBe(200);
+
+    const admApprove = await request(app)
+      .post(`/api/workflow/versions/${testVerId}/approve`)
+      .set('Authorization', `Bearer ${adminRoleToken}`)
+      .send({ departmentId: whDeptId, decision: 'APPROVED' });
+    expect(admApprove.status).toBe(200);
+
+    // Duplicate approval for WH must be rejected with 400
+    const dupApprove = await request(app)
+      .post(`/api/workflow/versions/${testVerId}/approve`)
+      .set('Authorization', `Bearer ${adminRoleToken}`)
+      .send({ departmentId: whDeptId, decision: 'APPROVED' });
+    expect(dupApprove.status).toBe(400);
+    expect(dupApprove.body.message).toContain('already formally approved');
+
+    // Designated QC Head (with role SOP_CREATOR) confirms agreement and approves for QC
+    const qcAgree = await request(app)
+      .post(`/api/workflow/versions/${testVerId}/confirm-agreement`)
+      .set('Authorization', `Bearer ${creatorHeadToken}`)
+      .send({ departmentId: qcDeptId });
+    expect(qcAgree.status).toBe(200);
+
+    const qcApprove = await request(app)
+      .post(`/api/workflow/versions/${testVerId}/approve`)
+      .set('Authorization', `Bearer ${creatorHeadToken}`)
+      .send({ departmentId: qcDeptId, decision: 'APPROVED' });
+    expect(qcApprove.status).toBe(200);
+
+    // Verify getSOP response has updated status FINAL_REVIEW, decisionUser firstName/lastName, and signatureToken
+    const getRes = await request(app)
+      .get(`/api/sops/${testSopId}`)
+      .set('Authorization', `Bearer ${adminRoleToken}`);
+    expect(getRes.status).toBe(200);
+    expect(getRes.body.sop.status).toBe(SOPStatuses.FINAL_REVIEW);
+    expect(getRes.body.currentVersion.status).toBe(SOPStatuses.FINAL_REVIEW);
+
+    const whParticipant = getRes.body.currentVersion.participants.find(
+      (p: any) => p.departmentId === whDeptId
+    );
+    expect(whParticipant.status).toBe('APPROVED');
+    expect(whParticipant.decisionUser.firstName).toBe('Kem');
+    expect(whParticipant.decisionUser.lastName).toBe('Mariel TestAdmin');
+
+    expect(getRes.body.currentVersion.approvals.length).toBe(2);
+    expect(getRes.body.currentVersion.approvals[0].signatureToken).toHaveLength(32);
+
+    // Restore original QC headUserId
+    await prisma.department.update({
+      where: { id: qcDeptId },
+      data: { headUserId: origQcDept?.headUserId || null },
+    });
+  });
 });
+

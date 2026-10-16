@@ -46,6 +46,9 @@ export function errorHandler(err: any, req: Request, res: Response, next: NextFu
       msg.includes('outdated') ||
       msg.includes('already finalized') ||
       msg.includes('already exists') ||
+      msg.includes('already formally approved') ||
+      msg.includes('not a participant') ||
+      msg.includes('not registered') ||
       msg.includes('agreement') ||
       msg.includes('does not have approval authority')
     ) {

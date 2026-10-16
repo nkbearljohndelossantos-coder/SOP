@@ -270,8 +270,13 @@ export async function submitApprovalDecision(
     );
   }
 
-  // If APPROVING: Agreement MUST be confirmed first!
+  // If APPROVING: Prevent duplicate approval & ensure Agreement is confirmed first!
   if (decision === ApprovalDecisions.APPROVED) {
+    if (participant.status === ParticipantStatuses.APPROVED) {
+      throw new Error(
+        `Department '${participant.department.name}' has already formally approved this SOP version.`
+      );
+    }
     if (!participant.agreementConfirmed) {
       throw new Error(
         `Department '${participant.department.name}' has not confirmed agreement yet. Department representatives must discuss and confirm agreement before formal approval.`
@@ -368,6 +373,21 @@ export async function submitApprovalDecision(
           type: 'ALL_APPROVED',
           link: `/sops/${version.sopId}?version=${version.versionNumber}`,
         },
+      });
+    } else if (
+      version.status === SOPStatuses.INITIAL_REVIEW ||
+      version.status === SOPStatuses.UNDER_REVIEW ||
+      version.status === SOPStatuses.DISCUSSION ||
+      version.status === SOPStatuses.DEPARTMENT_DISCUSSION ||
+      version.status === SOPStatuses.REMARKS_CONSOLIDATION
+    ) {
+      await prisma.sOPVersion.update({
+        where: { id: versionId },
+        data: { status: SOPStatuses.DEPARTMENT_APPROVAL },
+      });
+      await prisma.sOP.update({
+        where: { id: version.sopId },
+        data: { status: SOPStatuses.DEPARTMENT_APPROVAL },
       });
     }
   } else {
@@ -481,12 +501,6 @@ export async function finalizeSOP(versionId: string, userId: string, ipAddress?:
   if (!matrix.allRequiredApproved) {
     throw new Error(
       `Cannot finalize SOP: Pending approvals remain for required departments: ${matrix.pendingApproverDeptNames.join(', ')}`
-    );
-  }
-
-  if (!matrix.allRequiredReviewsCompleted) {
-    throw new Error(
-      `Cannot finalize SOP: Pending reviews remain for required reviewer departments: ${matrix.pendingReviewerDeptNames.join(', ')}`
     );
   }
 

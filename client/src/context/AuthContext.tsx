@@ -117,13 +117,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const isSuperAdmin = user?.role === Roles.SUPER_ADMIN;
   const isAdmin = isSuperAdmin || user?.role === Roles.ADMIN;
-  const isDeptHead = user?.role === Roles.DEPARTMENT_HEAD;
-  const isDeptRep = user?.role === Roles.DEPARTMENT_REPRESENTATIVE;
+  const isDeptHead =
+    user?.role === Roles.DEPARTMENT_HEAD || Boolean((user as any)?.headedDepartment);
+  const isDeptRep =
+    user?.role === Roles.DEPARTMENT_REPRESENTATIVE ||
+    user?.role === 'APPROVER' ||
+    Boolean((user as any)?.representativeDepartments?.length);
 
   const canCreateSOP = isAdmin || isDeptHead || isDeptRep || user?.role === 'SOP_CREATOR' || user?.role === Roles.CREATOR;
   const canManageUsers = isAdmin;
   const canManageDepartments = isAdmin;
-  const userDepartmentId = user?.departmentId || null;
+  const userDepartmentId = user?.departmentId || (user as any)?.headedDepartment?.id || null;
 
   return (
     <AuthContext.Provider
