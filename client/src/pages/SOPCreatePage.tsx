@@ -6,6 +6,7 @@ import {
   SOPImportPreviewModal,
   DocumentImportResult,
   CurrentFormValues,
+  ExtractedSOPFields,
 } from '../components/SOPImportPreviewModal';
 import {
   FileText,
@@ -21,6 +22,7 @@ import {
   CheckCircle2,
   RefreshCw,
   Calendar,
+  Eye,
 } from 'lucide-react';
 
 export const SOPCreatePage: React.FC = () => {
@@ -168,9 +170,29 @@ export const SOPCreatePage: React.FC = () => {
       });
 
       if (res.data?.success && res.data?.data) {
-        setImportResult(res.data.data);
+        const importData: DocumentImportResult = res.data.data;
+        setImportResult(importData);
         setImportedFile(file);
-        setIsImportModalOpen(true);
+
+        // Immediately populate form fields with extracted values
+        const ext = importData.fields || ({} as Partial<ExtractedSOPFields>);
+        handleApplyImportedFields({
+          departmentId: ext.departmentId || undefined,
+          sopNumber: ext.sopNumber || undefined,
+          title: ext.title || undefined,
+          purpose: ext.purpose || undefined,
+          scope: ext.scope || undefined,
+          responsibilities: ext.responsibilities || undefined,
+          procedure: ext.procedure || undefined,
+          relatedForms: ext.relatedForms || undefined,
+          references: ext.references || undefined,
+          effectiveDate: ext.effectiveDate ? ext.effectiveDate.slice(0, 10) : undefined,
+          reviewDate: ext.reviewDate ? ext.reviewDate.slice(0, 10) : undefined,
+          revisionReason: ext.revisionReason || undefined,
+        });
+
+        setImportedSourceName(file.name);
+        setIsImportModalOpen(false);
       }
     } catch (err: any) {
       setError(
@@ -518,20 +540,28 @@ export const SOPCreatePage: React.FC = () => {
       )}
 
       {importedSourceName && (
-        <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-900 text-xs flex flex-wrap items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <CheckCircle2 className="w-4 h-4 text-emerald-600 flex-shrink-0" />
-            <span>
-              Form populated from <strong>{importedSourceName}</strong>. Please review and edit all fields before saving as a Draft.
-            </span>
+        <div className="p-4 rounded-xl bg-emerald-50 border border-emerald-300 text-emerald-900 text-xs flex flex-wrap items-center justify-between gap-3 shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-emerald-100 text-emerald-700 rounded-lg">
+              <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+            </div>
+            <div>
+              <span className="font-bold text-sm block text-emerald-950">
+                Pumasok na agad ang laman ng &quot;{importedSourceName}&quot; sa form!
+              </span>
+              <span className="text-emerald-800">
+                Awtomatikong na-fill ang mga fields sa ibaba mula sa dokumento. Pwede mo itong baguhin o i-preview ang orihinal na format.
+              </span>
+            </div>
           </div>
           {importResult && (
             <button
               type="button"
               onClick={() => setIsImportModalOpen(true)}
-              className="text-xs font-bold text-emerald-800 hover:underline"
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-white hover:bg-emerald-100 text-emerald-900 font-bold rounded-lg border border-emerald-300 shadow-sm text-xs transition-colors"
             >
-              Re-open Import Preview →
+              <Eye className="w-3.5 h-3.5 text-emerald-700" />
+              <span>Preview Original Document / Format</span>
             </button>
           )}
         </div>
