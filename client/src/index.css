@@ -43,3 +43,25 @@
   }
 }
 
+/* DOCX Preview Layout Styles */
+.docx-preview-container .docx-wrapper {
+  background: transparent !important;
+  padding: 0 !important;
+}
+.docx-preview-container .docx-wrapper > section.docx {
+  background: #ffffff !important;
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
+  margin: 0 auto 1.5rem auto !important;
+  border-radius: 4px !important;
+  color: #0f172a !important;
+}
+.docx-preview-container table {
+  border-collapse: collapse !important;
+}
+.docx-preview-container table td,
+.docx-preview-container table th {
+  border: 1px solid #cbd5e1 !important;
+  padding: 6px 10px !important;
+}
+
+

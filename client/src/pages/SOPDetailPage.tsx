@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import api from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -46,8 +46,11 @@ import {
   Trash2,
   Edit3,
   Sparkles,
+  Eye,
+  Loader2,
 } from 'lucide-react';
 import { format } from 'date-fns';
+import { renderAsync } from 'docx-preview';
 
 export const SOPDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -110,11 +113,17 @@ export const SOPDetailPage: React.FC = () => {
   });
   const [draftImportingDoc, setDraftImportingDoc] = useState(false);
   const [draftImportResult, setDraftImportResult] = useState<DocumentImportResult | null>(null);
+  const [draftImportFile, setDraftImportFile] = useState<File | null>(null);
   const [isDraftImportModalOpen, setIsDraftImportModalOpen] = useState(false);
 
   // Attachments
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [previewAttachment, setPreviewAttachment] = useState<SOPAttachment | null>(null);
+  const [attachmentBlobUrl, setAttachmentBlobUrl] = useState<string | null>(null);
+  const [attachmentLoading, setAttachmentLoading] = useState(false);
+  const [attachmentDocxRendering, setAttachmentDocxRendering] = useState(false);
+  const attachmentDocxRef = useRef<HTMLDivElement>(null);
 
   const fetchSOP = useCallback(async () => {
     try {
@@ -323,6 +332,7 @@ export const SOPDetailPage: React.FC = () => {
 
       if (res.data?.success && res.data?.data) {
         setDraftImportResult(res.data.data);
+        setDraftImportFile(file);
         setIsDraftImportModalOpen(true);
 
         // Also attach the source document to this draft version if not already attached
@@ -499,6 +509,55 @@ export const SOPDetailPage: React.FC = () => {
     } catch (err: any) {
       setError(err.response?.data?.message || 'Failed to remove attachment.');
     }
+  };
+
+  const handleOpenAttachmentPreview = async (att: SOPAttachment) => {
+    setPreviewAttachment(att);
+    setAttachmentLoading(true);
+    try {
+      const res = await api.get(`/attachments/${att.id}/download`, {
+        responseType: 'blob',
+      });
+      const blob = res.data;
+      const url = URL.createObjectURL(blob);
+      setAttachmentBlobUrl(url);
+
+      const filename = (att.originalFilename || att.fileName || '').toLowerCase();
+      if (filename.endsWith('.docx')) {
+        setAttachmentDocxRendering(true);
+        setTimeout(async () => {
+          if (attachmentDocxRef.current) {
+            try {
+              attachmentDocxRef.current.innerHTML = '';
+              await renderAsync(await blob.arrayBuffer(), attachmentDocxRef.current, undefined, {
+                className: 'docx-preview',
+                inWrapper: true,
+                ignoreWidth: false,
+                ignoreHeight: false,
+                breakPages: true,
+              });
+            } catch (err) {
+              console.error('Failed to render docx attachment:', err);
+            } finally {
+              setAttachmentDocxRendering(false);
+            }
+          }
+        }, 100);
+      }
+    } catch {
+      setError('Failed to load attachment for preview.');
+      setPreviewAttachment(null);
+    } finally {
+      setAttachmentLoading(false);
+    }
+  };
+
+  const handleCloseAttachmentPreview = () => {
+    if (attachmentBlobUrl) {
+      URL.revokeObjectURL(attachmentBlobUrl);
+      setAttachmentBlobUrl(null);
+    }
+    setPreviewAttachment(null);
   };
 
   if (loading) {
@@ -1357,6 +1416,18 @@ export const SOPDetailPage: React.FC = () => {
                   </div>
 
                   <div className="flex items-center gap-3">
+                    {Boolean(
+                      (att.originalFilename || att.fileName || '').match(/\.(pdf|docx)$/i)
+                    ) && (
+                      <button
+                        type="button"
+                        onClick={() => handleOpenAttachmentPreview(att)}
+                        className="inline-flex items-center gap-1 text-slate-700 hover:text-blue-600 font-semibold"
+                        title="Preview formatted document"
+                      >
+                        <Eye className="w-3.5 h-3.5 text-blue-600" /> Preview
+                      </button>
+                    )}
                     <a
                       href={`/api/attachments/${att.id}/download`}
                       download={att.originalFilename || att.fileName}
@@ -1970,12 +2041,86 @@ export const SOPDetailPage: React.FC = () => {
       <SOPImportPreviewModal
         isOpen={isDraftImportModalOpen}
         importResult={draftImportResult}
+        uploadedFile={draftImportFile}
         currentValues={draftForm}
         departments={[]}
         isDraftEditMode={true}
         onClose={() => setIsDraftImportModalOpen(false)}
         onApplyFields={handleApplyDraftImport}
       />
+
+      {/* Modal: Controlled Attachment Formatted Document Preview */}
+      <Modal
+        isOpen={Boolean(previewAttachment)}
+        onClose={handleCloseAttachmentPreview}
+        title={`Attachment Preview: ${previewAttachment?.originalFilename || previewAttachment?.fileName || 'Document'}`}
+        maxWidth="5xl"
+      >
+        <div className="space-y-4">
+          <div className="flex items-center justify-between bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
+            <div className="flex items-center gap-2 text-slate-700">
+              <Paperclip className="w-4 h-4 text-slate-500" />
+              <span className="font-semibold">{previewAttachment?.originalFilename || previewAttachment?.fileName}</span>
+              {previewAttachment && (
+                <span className="text-slate-400">
+                  ({(previewAttachment.fileSize / 1024).toFixed(1)} KB)
+                </span>
+              )}
+            </div>
+            {previewAttachment && (
+              <a
+                href={`/api/attachments/${previewAttachment.id}/download`}
+                download={previewAttachment.originalFilename || previewAttachment.fileName}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white border border-slate-300 rounded-md text-xs font-semibold text-slate-700 hover:bg-slate-100 shadow-sm"
+              >
+                <Download className="w-3.5 h-3.5" /> Download Original File
+              </a>
+            )}
+          </div>
+
+          {attachmentLoading ? (
+            <div className="py-20 text-center text-slate-500 text-sm flex flex-col items-center justify-center">
+              <Loader2 className="w-8 h-8 animate-spin text-blue-600 mb-2" />
+              Loading attachment...
+            </div>
+          ) : (previewAttachment?.originalFilename || previewAttachment?.fileName || '').toLowerCase().endsWith('.docx') ? (
+            <div>
+              {attachmentDocxRendering && (
+                <div className="py-12 text-center text-slate-500 text-sm flex flex-col items-center justify-center">
+                  <Loader2 className="w-6 h-6 animate-spin text-blue-600 mb-2" />
+                  Rendering Word Document formatting...
+                </div>
+              )}
+              <div
+                ref={attachmentDocxRef}
+                className="docx-preview-container max-h-[70vh] overflow-y-auto bg-slate-100 p-4 rounded-lg border border-slate-200"
+              />
+            </div>
+          ) : (previewAttachment?.originalFilename || previewAttachment?.fileName || '').toLowerCase().endsWith('.pdf') && attachmentBlobUrl ? (
+            <div className="rounded-lg overflow-hidden border border-slate-200 bg-slate-900 shadow-inner">
+              <iframe
+                src={`${attachmentBlobUrl}#toolbar=1`}
+                title="PDF Attachment Viewer"
+                className="w-full h-[70vh] border-0"
+              />
+            </div>
+          ) : (
+            <div className="p-8 text-center text-xs text-slate-500">
+              Interactive preview is available for Microsoft Word (.docx) and PDF (.pdf) documents.
+            </div>
+          )}
+
+          <div className="flex justify-end pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={handleCloseAttachmentPreview}
+              className="px-4 py-2 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-100"
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 };

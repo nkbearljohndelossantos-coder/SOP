@@ -50,6 +50,7 @@ export const SOPCreatePage: React.FC = () => {
   // Smart Document Import State
   const [importingDoc, setImportingDoc] = useState(false);
   const [importResult, setImportResult] = useState<DocumentImportResult | null>(null);
+  const [importedFile, setImportedFile] = useState<File | null>(null);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [importedSourceName, setImportedSourceName] = useState<string | null>(null);
   const [autoFilledKeys, setAutoFilledKeys] = useState<Record<string, boolean>>({});
@@ -158,6 +159,7 @@ export const SOPCreatePage: React.FC = () => {
 
       if (res.data?.success && res.data?.data) {
         setImportResult(res.data.data);
+        setImportedFile(file);
         setIsImportModalOpen(true);
       }
     } catch (err: any) {
@@ -1065,6 +1067,7 @@ export const SOPCreatePage: React.FC = () => {
       <SOPImportPreviewModal
         isOpen={isImportModalOpen}
         importResult={importResult}
+        uploadedFile={importedFile}
         currentValues={{
           sopNumber,
           title,

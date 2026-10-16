@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
   AlertTriangle,
@@ -12,7 +12,11 @@ import {
   ShieldAlert,
   Table as TableIcon,
   History,
+  Download,
+  FileCode,
+  Layers,
 } from 'lucide-react';
+import { renderAsync } from 'docx-preview';
 import { Department } from '../types';
 
 export type FieldConfidence = 'HIGH' | 'MEDIUM' | 'LOW' | 'MISSING';
@@ -93,6 +97,7 @@ export interface CurrentFormValues {
 interface SOPImportPreviewModalProps {
   isOpen: boolean;
   importResult: DocumentImportResult | null;
+  uploadedFile?: File | null;
   currentValues: CurrentFormValues;
   departments: Department[];
   isDraftEditMode?: boolean;
@@ -107,6 +112,7 @@ type MappableFieldKey = keyof CurrentFormValues;
 export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
   isOpen,
   importResult,
+  uploadedFile = null,
   currentValues,
   departments,
   isDraftEditMode = false,
@@ -145,9 +151,71 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
     revisionReason: '',
   });
 
+  const [activeTab, setActiveTab] = useState<'fields' | 'preview'>('fields');
+  const [previewMode, setPreviewMode] = useState<'formatted' | 'raw'>('formatted');
   const [confirmOverwriteExisting, setConfirmOverwriteExisting] = useState(false);
-  const [showRawSource, setShowRawSource] = useState(false);
   const [generatingAutoNumber, setGeneratingAutoNumber] = useState(false);
+  const [pdfBlobUrl, setPdfBlobUrl] = useState<string | null>(null);
+  const [docxRendering, setDocxRendering] = useState(false);
+  const [docxRenderError, setDocxRenderError] = useState<string | null>(null);
+  const docxContainerRef = useRef<HTMLDivElement>(null);
+
+  // Manage object URL for original PDF preview
+  useEffect(() => {
+    if (uploadedFile) {
+      const url = URL.createObjectURL(uploadedFile);
+      setPdfBlobUrl(url);
+      return () => {
+        URL.revokeObjectURL(url);
+      };
+    } else {
+      setPdfBlobUrl(null);
+    }
+  }, [uploadedFile]);
+
+  // Render formatted DOCX layout into DOM container when Preview tab is active
+  useEffect(() => {
+    if (
+      activeTab === 'preview' &&
+      previewMode === 'formatted' &&
+      importResult?.fileType === 'DOCX' &&
+      uploadedFile &&
+      docxContainerRef.current
+    ) {
+      let isMounted = true;
+      setDocxRendering(true);
+      setDocxRenderError(null);
+
+      uploadedFile
+        .arrayBuffer()
+        .then(async (arrayBuffer) => {
+          if (!isMounted || !docxContainerRef.current) return;
+          docxContainerRef.current.innerHTML = '';
+          await renderAsync(arrayBuffer, docxContainerRef.current, undefined, {
+            className: 'docx-preview',
+            inWrapper: true,
+            ignoreWidth: false,
+            ignoreHeight: false,
+            breakPages: true,
+          });
+        })
+        .catch((err) => {
+          console.error('Docx render error:', err);
+          if (isMounted) {
+            setDocxRenderError(
+              'Could not render full DOCX visual layout. You can still inspect the extracted text and download the original file.'
+            );
+          }
+        })
+        .finally(() => {
+          if (isMounted) setDocxRendering(false);
+        });
+
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [activeTab, previewMode, importResult?.fileType, uploadedFile]);
 
   useEffect(() => {
     if (!importResult) return;
@@ -323,8 +391,8 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
   const selectedCount = visibleFields.filter((d) => selectedFields[d.key]).length;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[94vh] flex flex-col overflow-hidden">
         {/* Modal Header */}
         <div className="px-6 py-4 bg-slate-900 text-white flex items-center justify-between border-b border-slate-800">
           <div className="flex items-center gap-3">
@@ -333,13 +401,13 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
             </div>
             <div>
               <h2 className="text-base font-bold tracking-tight flex items-center gap-2">
-                Smart SOP Document Import & Auto-Fill Preview
+                Smart SOP Document Import & Auto-Fill
                 <span className="px-2 py-0.5 text-[10px] font-mono uppercase rounded bg-blue-500/30 text-blue-200 border border-blue-400/30">
                   {importResult.fileType}
                 </span>
               </h2>
               <p className="text-xs text-slate-300 mt-0.5">
-                Source: <span className="font-semibold text-white">{importResult.fileName}</span> • Review and confirm extracted fields before populating the SOP form.
+                Source: <span className="font-semibold text-white">{importResult.fileName}</span> • Inspect the formatted original document or review extracted fields.
               </p>
             </div>
           </div>
@@ -352,44 +420,207 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
           </button>
         </div>
 
-        {/* Scrollable Content */}
-        <div className="p-6 overflow-y-auto space-y-5 flex-1 bg-slate-50/50">
-          {/* Extraction Summary Bar */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2.5 text-xs">
-              {importResult.extractionMethod === 'OCR' ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold bg-amber-100 text-amber-900 border border-amber-300">
-                  <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
-                  OCR Scanned Document ({importResult.ocrConfidence ?? 0}% Confidence)
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold bg-blue-50 text-blue-800 border border-blue-200">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
-                  Deterministic Structure Extraction
-                </span>
-              )}
-
-              {importResult.tablesExtracted > 0 && (
-                <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                  <TableIcon className="w-3.5 h-3.5 text-slate-500" />
-                  {importResult.tablesExtracted} Table{importResult.tablesExtracted === 1 ? '' : 's'} Parsed
-                </span>
-              )}
-
-              <span className="text-slate-500">
-                Original file is preserved and will be attached to Draft Version 1.0.
+        {/* View Switcher Tabs: View A (Editable Form) vs View B (Original Document Preview) */}
+        <div className="px-6 py-2.5 bg-slate-100 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-1.5 bg-white p-1 rounded-xl border border-slate-200 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setActiveTab('fields')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'fields'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>View A: Extracted Fields & Form Auto-Fill</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-extrabold ${
+                  activeTab === 'fields'
+                    ? 'bg-blue-700 text-white'
+                    : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {selectedCount}
               </span>
-            </div>
+            </button>
 
             <button
               type="button"
-              onClick={() => setShowRawSource((prev) => !prev)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+              onClick={() => setActiveTab('preview')}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${
+                activeTab === 'preview'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+              }`}
             >
-              {showRawSource ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-              {showRawSource ? 'Hide Raw Source Text' : 'Inspect Raw Source Text'}
+              <Eye className="w-3.5 h-3.5" />
+              <span>View B: Original Formatted Document</span>
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                  activeTab === 'preview'
+                    ? 'bg-blue-700 text-white'
+                    : 'bg-slate-100 text-slate-700'
+                }`}
+              >
+                {importResult.fileType}
+              </span>
             </button>
           </div>
+
+          <div className="flex items-center gap-2">
+            {uploadedFile && (
+              <a
+                href={pdfBlobUrl || undefined}
+                download={uploadedFile.name}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-white border border-slate-300 text-slate-700 hover:bg-slate-50 shadow-sm"
+                title="Download original file"
+              >
+                <Download className="w-3.5 h-3.5 text-slate-500" />
+                <span>Download Original File</span>
+              </a>
+            )}
+          </div>
+        </div>
+
+        {/* Scrollable Content */}
+        <div className="p-6 overflow-y-auto space-y-5 flex-1 bg-slate-50/50">
+          {activeTab === 'preview' ? (
+            /* View B: Original Formatted Document Preview */
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                  <span className="font-bold text-slate-800">
+                    {importResult.fileType === 'DOCX' ? 'Microsoft Word Document' : 'PDF Document'}:
+                  </span>
+                  <span className="text-slate-600">{importResult.fileName}</span>
+                  <span className="text-slate-400">•</span>
+                  <span className="text-slate-500">{(importResult.fileSize / 1024).toFixed(1)} KB</span>
+                  {importResult.pageCount > 0 && (
+                    <>
+                      <span className="text-slate-400">•</span>
+                      <span className="text-slate-500">{importResult.pageCount} Page{importResult.pageCount === 1 ? '' : 's'}</span>
+                    </>
+                  )}
+                  <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    {importResult.fileType === 'DOCX'
+                      ? 'Format Engine Active: Fonts, Tables, Borders & Margins Preserved'
+                      : 'Native PDF Engine Active: Exact Page Geometry & Styling Preserved'}
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setPreviewMode('formatted')}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${
+                      previewMode === 'formatted'
+                        ? 'bg-white text-blue-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Formatted Layout
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPreviewMode('raw')}
+                    className={`px-2.5 py-1 rounded text-xs font-semibold transition-colors ${
+                      previewMode === 'raw'
+                        ? 'bg-white text-blue-700 shadow-sm'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    Raw Extracted Text
+                  </button>
+                </div>
+              </div>
+
+              {previewMode === 'formatted' ? (
+                importResult.fileType === 'DOCX' ? (
+                  <div className="bg-slate-200/80 p-4 sm:p-6 rounded-xl overflow-auto max-h-[64vh] border border-slate-300">
+                    {docxRendering && (
+                      <div className="py-16 text-center space-y-3">
+                        <span className="inline-block w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                        <p className="text-xs font-semibold text-slate-600">
+                          Rendering formatted Microsoft Word layout with tables, borders, and margins...
+                        </p>
+                      </div>
+                    )}
+                    {docxRenderError && (
+                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-900 mb-4">
+                        <p className="font-semibold">{docxRenderError}</p>
+                      </div>
+                    )}
+                    <div
+                      ref={docxContainerRef}
+                      className="docx-preview-container shadow-xl mx-auto min-h-[300px]"
+                    />
+                  </div>
+                ) : (
+                  <div className="bg-slate-100 rounded-xl overflow-hidden border border-slate-300 shadow-inner">
+                    {pdfBlobUrl ? (
+                      <iframe
+                        src={`${pdfBlobUrl}#toolbar=1&navpanes=1`}
+                        title="Original PDF Document"
+                        className="w-full h-[64vh] border-0"
+                      />
+                    ) : (
+                      <div className="py-16 text-center text-xs text-slate-500">
+                        PDF preview is loading or unavailable. Use the Download button above to inspect the file.
+                      </div>
+                    )}
+                  </div>
+                )
+              ) : (
+                <div className="space-y-3">
+                  <div className="bg-white p-3 rounded-lg border border-slate-200 text-xs text-slate-600">
+                    Verbatim text and table tokens extracted by the document parsing engine:
+                  </div>
+                  <pre className="p-4 bg-slate-900 text-slate-100 rounded-xl text-xs font-mono overflow-auto max-h-[60vh] leading-relaxed whitespace-pre-wrap selection:bg-blue-600">
+                    {importResult.sourcePreviewText || 'No source text available.'}
+                  </pre>
+                </div>
+              )}
+            </div>
+          ) : (
+            /* View A: Extracted Fields & Form Auto-Fill */
+            <>
+              {/* Extraction Summary Bar */}
+              <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-3">
+                <div className="flex flex-wrap items-center gap-2.5 text-xs">
+                  {importResult.extractionMethod === 'OCR' ? (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                      <AlertTriangle className="w-3.5 h-3.5 text-amber-700" />
+                      OCR Scanned Document ({importResult.ocrConfidence ?? 0}% Confidence)
+                    </span>
+                  ) : (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full font-bold bg-blue-50 text-blue-800 border border-blue-200">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
+                      Deterministic Structure Extraction
+                    </span>
+                  )}
+
+                  {importResult.tablesExtracted > 0 && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                      <TableIcon className="w-3.5 h-3.5 text-slate-500" />
+                      {importResult.tablesExtracted} Table{importResult.tablesExtracted === 1 ? '' : 's'} Parsed
+                    </span>
+                  )}
+
+                  <span className="text-slate-500">
+                    Original file is preserved and will be attached to Version 1.0.
+                  </span>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('preview')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-slate-300 bg-white text-slate-700 hover:bg-slate-50"
+                >
+                  <Eye className="w-3.5 h-3.5 text-slate-500" />
+                  Inspect Original Document
+                </button>
+              </div>
 
           {/* Duplicate SOP Warning Banner */}
           {importResult.duplicateSop && !isDraftEditMode && (
@@ -443,22 +674,6 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
                   <li key={idx}>{w}</li>
                 ))}
               </ul>
-            </div>
-          )}
-
-          {/* Raw Source Text Collapsible */}
-          {showRawSource && (
-            <div className="bg-slate-900 text-slate-100 rounded-xl p-4 border border-slate-700 space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-400 border-b border-slate-800 pb-2">
-                <span className="font-semibold text-slate-200 flex items-center gap-1.5">
-                  <FileText className="w-3.5 h-3.5 text-blue-400" />
-                  Raw Text Extracted from Uploaded File (Read-Only Reference)
-                </span>
-                <span>{importResult.sourcePreviewText.length.toLocaleString()} chars</span>
-              </div>
-              <pre className="text-[11px] font-mono whitespace-pre-wrap max-h-56 overflow-y-auto leading-relaxed text-slate-300">
-                {importResult.sourcePreviewText || 'No raw text available.'}
-              </pre>
             </div>
           )}
 
@@ -635,6 +850,8 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
               );
             })}
           </div>
+            </>
+          )}
         </div>
 
         {/* Modal Footer */}
