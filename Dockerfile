@@ -30,8 +30,8 @@ RUN npm run build
 FROM node:20-alpine AS runner
 WORKDIR /app
 
-# Install required native libraries for Prisma on Alpine
-RUN apk add --no-cache openssl libc6-compat dumb-init
+# Install required native libraries for Prisma and scanned PDF OCR on Alpine
+RUN apk add --no-cache openssl libc6-compat dumb-init poppler-utils tesseract-ocr tesseract-ocr-data-eng
 
 ENV NODE_ENV=production
 ENV APP_ENV=production

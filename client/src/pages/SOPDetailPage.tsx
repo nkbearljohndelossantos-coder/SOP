@@ -20,6 +20,11 @@ import {
 } from '../components/common/Badge';
 import { Modal } from '../components/common/Modal';
 import {
+  SOPImportPreviewModal,
+  DocumentImportResult,
+  CurrentFormValues,
+} from '../components/SOPImportPreviewModal';
+import {
   FileText,
   Users,
   CheckCircle,
@@ -40,6 +45,7 @@ import {
   Download,
   Trash2,
   Edit3,
+  Sparkles,
 } from 'lucide-react';
 import { format } from 'date-fns';
 
@@ -100,7 +106,11 @@ export const SOPDetailPage: React.FC = () => {
     references: '',
     effectiveDate: '',
     reviewDate: '',
+    revisionReason: '',
   });
+  const [draftImportingDoc, setDraftImportingDoc] = useState(false);
+  const [draftImportResult, setDraftImportResult] = useState<DocumentImportResult | null>(null);
+  const [isDraftImportModalOpen, setIsDraftImportModalOpen] = useState(false);
 
   // Attachments
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -126,6 +136,7 @@ export const SOPDetailPage: React.FC = () => {
           references: currVer.references || '',
           effectiveDate: currVer.effectiveDate ? currVer.effectiveDate.slice(0, 10) : '',
           reviewDate: currVer.reviewDate ? currVer.reviewDate.slice(0, 10) : '',
+          revisionReason: currVer.revisionReason || '',
         });
       }
     } catch (err: any) {
@@ -287,9 +298,77 @@ export const SOPDetailPage: React.FC = () => {
         references: activeVersion.references || '',
         effectiveDate: activeVersion.effectiveDate ? activeVersion.effectiveDate.slice(0, 10) : '',
         reviewDate: activeVersion.reviewDate ? activeVersion.reviewDate.slice(0, 10) : '',
+        revisionReason: activeVersion.revisionReason || '',
       });
     }
     setShowEditDraftModal(true);
+  };
+
+  const handleDraftSmartImport = async (file: File) => {
+    const ext = '.' + file.name.split('.').pop()?.toLowerCase();
+    if (ext !== '.docx' && ext !== '.pdf') {
+      setError('Smart Import supports Word (.docx) and PDF (.pdf) documents only.');
+      return;
+    }
+
+    try {
+      setDraftImportingDoc(true);
+      setError(null);
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await api.post('/sops/import-document', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      if (res.data?.success && res.data?.data) {
+        setDraftImportResult(res.data.data);
+        setIsDraftImportModalOpen(true);
+
+        // Also attach the source document to this draft version if not already attached
+        if (activeVersion) {
+          const alreadyAttached = activeVersion.attachments?.some(
+            (a) => (a.originalFilename || a.fileName) === file.name
+          );
+          if (!alreadyAttached) {
+            try {
+              const attForm = new FormData();
+              attForm.append('file', file);
+              await api.post(`/attachments/versions/${activeVersion.id}`, attForm, {
+                headers: { 'Content-Type': 'multipart/form-data' },
+              });
+            } catch {
+              // ignore attachment upload failure during draft preview
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      setError(
+        err.response?.data?.message || `Failed to extract content from "${file.name}".`
+      );
+    } finally {
+      setDraftImportingDoc(false);
+    }
+  };
+
+  const handleApplyDraftImport = (applied: Partial<CurrentFormValues>) => {
+    setDraftForm((prev) => ({
+      ...prev,
+      title: applied.title !== undefined ? applied.title : prev.title,
+      purpose: applied.purpose !== undefined ? applied.purpose : prev.purpose,
+      scope: applied.scope !== undefined ? applied.scope : prev.scope,
+      responsibilities:
+        applied.responsibilities !== undefined ? applied.responsibilities : prev.responsibilities,
+      procedure: applied.procedure !== undefined ? applied.procedure : prev.procedure,
+      relatedForms: applied.relatedForms !== undefined ? applied.relatedForms : prev.relatedForms,
+      references: applied.references !== undefined ? applied.references : prev.references,
+      effectiveDate:
+        applied.effectiveDate !== undefined ? applied.effectiveDate : prev.effectiveDate,
+      reviewDate: applied.reviewDate !== undefined ? applied.reviewDate : prev.reviewDate,
+      revisionReason:
+        applied.revisionReason !== undefined ? applied.revisionReason : prev.revisionReason,
+    }));
   };
 
   const handleSaveDraft = async (e: React.FormEvent) => {
@@ -298,6 +377,8 @@ export const SOPDetailPage: React.FC = () => {
     try {
       await api.put(`/sops/versions/${activeVersion.id}`, {
         ...draftForm,
+        effectiveDate: draftForm.effectiveDate || null,
+        reviewDate: draftForm.reviewDate || null,
         lockVersion: activeVersion.lockVersion,
       });
       setShowEditDraftModal(false);
@@ -1741,6 +1822,36 @@ export const SOPDetailPage: React.FC = () => {
         maxWidth="2xl"
       >
         <form onSubmit={handleSaveDraft} className="space-y-4 text-xs">
+          {/* Smart Document Import Bar for Drafts */}
+          <div className="p-3 bg-blue-50/70 border border-blue-200 rounded-xl flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="font-bold text-blue-900 flex items-center gap-1.5">
+                <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                Smart Document Import (.docx / .pdf)
+              </span>
+              <span className="text-[11px] text-blue-700 block">
+                Extract and populate draft sections from a Word or PDF file with preview & overwrite confirmation.
+              </span>
+            </div>
+            <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white font-semibold cursor-pointer shadow-sm transition-colors">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{draftImportingDoc ? 'Extracting...' : 'Import from DOCX / PDF'}</span>
+              <input
+                type="file"
+                accept=".docx,.pdf"
+                disabled={draftImportingDoc}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) {
+                    handleDraftSmartImport(f);
+                    e.target.value = '';
+                  }
+                }}
+                className="hidden"
+              />
+            </label>
+          </div>
+
           <div>
             <label className="block font-semibold text-slate-700 mb-1">Procedure Title *</label>
             <input
@@ -1750,6 +1861,27 @@ export const SOPDetailPage: React.FC = () => {
               onChange={(e) => setDraftForm({ ...draftForm, title: e.target.value })}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Effective Date</label>
+              <input
+                type="date"
+                value={draftForm.effectiveDate}
+                onChange={(e) => setDraftForm({ ...draftForm, effectiveDate: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">Review Date</label>
+              <input
+                type="date"
+                value={draftForm.reviewDate}
+                onChange={(e) => setDraftForm({ ...draftForm, reviewDate: e.target.value })}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
+              />
+            </div>
           </div>
 
           <div>
@@ -1834,6 +1966,16 @@ export const SOPDetailPage: React.FC = () => {
           </div>
         </form>
       </Modal>
+
+      <SOPImportPreviewModal
+        isOpen={isDraftImportModalOpen}
+        importResult={draftImportResult}
+        currentValues={draftForm}
+        departments={[]}
+        isDraftEditMode={true}
+        onClose={() => setIsDraftImportModalOpen(false)}
+        onApplyFields={handleApplyDraftImport}
+      />
     </div>
   );
 };

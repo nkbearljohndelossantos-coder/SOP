@@ -4,6 +4,10 @@ import { z } from 'zod';
 import { prisma } from '../prisma/client';
 import { logAudit } from '../services/auditService';
 import {
+  DocumentValidationError,
+  importAndExtractSOPDocument,
+} from '../services/documentImportService';
+import {
   calculateApprovalMatrix,
   createNewRevision,
   createSOP,
@@ -599,3 +603,61 @@ export async function getPrintableSOP(req: Request, res: Response) {
     },
   });
 }
+
+export async function handleImportSOPDocument(req: Request, res: Response) {
+  if (!req.file) {
+    return res.status(400).json({
+      success: false,
+      message: 'No document file uploaded. Please attach a valid .docx or .pdf file.',
+    });
+  }
+
+  try {
+    const result = await importAndExtractSOPDocument(
+      req.file.buffer,
+      req.file.originalname,
+      req.file.mimetype
+    );
+
+    if (req.user) {
+      await logAudit({
+        userId: req.user.id,
+        username: req.user.username || req.user.fullName,
+        action: 'SOP_DOCUMENT_IMPORTED',
+        entity: 'SOP',
+        entityId: result.fields.sopNumber || req.file.originalname,
+        metadata: {
+          fileName: result.fileName,
+          fileSize: result.fileSize,
+          fileType: result.fileType,
+          extractionMethod: result.extractionMethod,
+          ocrConfidence: result.ocrConfidence,
+          extractedSopNumber: result.fields.sopNumber,
+          extractedTitle: result.fields.title,
+          matchedDepartmentId: result.fields.departmentId,
+          missingRequiredFields: result.missingRequiredFields,
+          warningsCount: result.warnings.length,
+        },
+        ipAddress: req.ip,
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message:
+        result.extractionMethod === 'OCR'
+          ? 'Scanned document processed with OCR. Please verify all extracted fields carefully.'
+          : 'Document parsed and mapped to SOP fields successfully.',
+      data: result,
+    });
+  } catch (err: any) {
+    if (err instanceof DocumentValidationError) {
+      return res.status(err.statusCode).json({
+        success: false,
+        message: err.message,
+      });
+    }
+    throw err;
+  }
+}
+
