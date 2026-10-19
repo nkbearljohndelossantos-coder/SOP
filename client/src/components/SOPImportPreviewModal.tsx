@@ -349,12 +349,6 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
     { key: 'effectiveDate', label: 'Effective Date (From Document)', type: 'date' },
     { key: 'reviewDate', label: 'Review Date (From Document)', type: 'date' },
     { key: 'revisionReason', label: 'Revision Reason / Document History', type: 'text' },
-    { key: 'purpose', label: '1.0 Purpose / Objective', required: true, multiline: true, rows: 3 },
-    { key: 'scope', label: '2.0 Scope & Applicability', required: true, multiline: true, rows: 3 },
-    { key: 'responsibilities', label: '3.0 Responsibilities', required: true, multiline: true, rows: 4 },
-    { key: 'procedure', label: '4.0 Step-by-Step Procedure', required: true, multiline: true, rows: 7 },
-    { key: 'relatedForms', label: '5.0 Related Forms / Attachments / Records', multiline: true, rows: 2 },
-    { key: 'references', label: '6.0 References & Standards', multiline: true, rows: 2 },
   ];
 
   const visibleFields = fieldDefinitions.filter(
