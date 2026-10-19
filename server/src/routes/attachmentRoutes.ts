@@ -3,6 +3,7 @@ import {
   deleteAttachment,
   downloadAttachment,
   getAttachmentInfo,
+  stageAttachment,
   uploadAttachment,
   uploadMiddleware,
   uploadMultipleAttachments,
@@ -15,6 +16,7 @@ const router = Router();
 
 router.use(authenticateToken);
 
+router.post('/stage', uploadMiddleware.single('file'), asyncHandler(stageAttachment));
 router.post('/versions/:versionId', uploadMiddleware.single('file'), asyncHandler(uploadAttachment));
 router.post('/versions/:versionId/batch', uploadMultipleMiddleware, asyncHandler(uploadMultipleAttachments));
 router.get('/:id/download', asyncHandler(downloadAttachment));

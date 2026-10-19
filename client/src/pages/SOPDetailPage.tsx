@@ -1047,6 +1047,15 @@ export const SOPDetailPage: React.FC = () => {
           sopTitle={sop.title}
           canEdit={canEditDraft}
           onRefresh={fetchSOP}
+          onFileSelect={async (file) => {
+            if (!activeVersion) return;
+            const formData = new FormData();
+            formData.append('file', file);
+            await api.post(`/attachments/versions/${activeVersion.id}`, formData, {
+              headers: { 'Content-Type': 'multipart/form-data' },
+            });
+            await fetchSOP();
+          }}
         />
       )}
 

@@ -15,6 +15,7 @@ import {
   updateDraft,
 } from '../services/sopService';
 import { ParticipationTypes, SOPStatuses } from '../types';
+import { consumeStagedAttachment } from './attachmentController';
 
 const createSOPSchema = z.object({
   sopNumber: z.string().optional(),
@@ -32,6 +33,7 @@ const createSOPSchema = z.object({
   reviewDate: z.string().optional().nullable(),
   revisionReason: z.string().optional(),
   changeSummary: z.string().optional(),
+  stagedAttachmentIds: z.array(z.string()).optional(),
   participants: z.array(
     z.object({
       departmentId: z.string(),
@@ -405,6 +407,56 @@ export async function handleCreateSOP(req: Request, res: Response) {
     },
     req.ip
   );
+
+  // Link any staged attachments to the newly created version
+  if (data.stagedAttachmentIds && data.stagedAttachmentIds.length > 0) {
+    let primaryAttachmentIdToSet: string | null = null;
+    let documentHashToSet: string | null = null;
+
+    for (const stagedId of data.stagedAttachmentIds) {
+      const staged = consumeStagedAttachment(stagedId);
+      if (staged) {
+        const attachment = await prisma.sOPAttachment.create({
+          data: {
+            sopVersionId: result.version.id,
+            originalFilename: staged.originalFilename,
+            storedFilename: staged.storedFilename,
+            mimeType: staged.mimeType,
+            fileSize: staged.fileSize,
+            uploadedById: req.user!.id,
+          },
+        });
+
+        if (!primaryAttachmentIdToSet) {
+          primaryAttachmentIdToSet = attachment.id;
+          documentHashToSet = staged.fileHash;
+        }
+
+        await logAudit({
+          userId: req.user?.id,
+          action: 'ATTACHMENT_COMMITTED',
+          entity: 'SOPAttachment',
+          entityId: attachment.id,
+          newValue: { filename: attachment.originalFilename, size: attachment.fileSize, hash: staged.fileHash },
+          ipAddress: req.ip,
+        });
+      }
+    }
+
+    if (primaryAttachmentIdToSet) {
+      await prisma.sOPVersion.update({
+        where: { id: result.version.id },
+        data: {
+          primaryAttachmentId: primaryAttachmentIdToSet,
+          ...(documentHashToSet ? { documentHash: documentHashToSet } : {}),
+        },
+      });
+      result.version.primaryAttachmentId = primaryAttachmentIdToSet;
+      if (documentHashToSet) {
+        result.version.documentHash = documentHashToSet;
+      }
+    }
+  }
 
   return res.status(201).json({
     success: true,

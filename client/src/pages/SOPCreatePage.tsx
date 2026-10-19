@@ -8,6 +8,7 @@ import {
   CurrentFormValues,
   ExtractedSOPFields,
 } from '../components/SOPImportPreviewModal';
+import { SOPDocumentViewer, StagedDocumentInfo } from '../components/SOPDocumentViewer';
 import {
   FileText,
   Users,
@@ -50,6 +51,12 @@ export const SOPCreatePage: React.FC = () => {
   const [reviewDate, setReviewDate] = useState('');
   const [revisionReason, setRevisionReason] = useState('');
 
+  // Primary Procedure Document & Staged Preview State
+  const [primaryFile, setPrimaryFile] = useState<File | null>(null);
+  const [stagedDoc, setStagedDoc] = useState<StagedDocumentInfo | null>(null);
+  const [stagedDocUploadStatus, setStagedDocUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
+  const [stagedDocError, setStagedDocError] = useState<string | null>(null);
+
   // Smart Document Import State
   const [importingDoc, setImportingDoc] = useState(false);
   const [importResult, setImportResult] = useState<DocumentImportResult | null>(null);
@@ -59,7 +66,7 @@ export const SOPCreatePage: React.FC = () => {
   const [autoFilledKeys, setAutoFilledKeys] = useState<Record<string, boolean>>({});
   const [loadingNextNum, setLoadingNextNum] = useState(false);
 
-  // File Upload State
+  // Supporting File Attachments State
   const [attachments, setAttachments] = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -204,11 +211,35 @@ export const SOPCreatePage: React.FC = () => {
     }
   };
 
+  const stagePrimaryDocument = async (file: File) => {
+    try {
+      setStagedDocUploadStatus('uploading');
+      setStagedDocError(null);
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await api.post('/attachments/stage', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+
+      if (res.data?.success && res.data?.data) {
+        setStagedDoc(res.data.data);
+        setStagedDocUploadStatus('success');
+      }
+    } catch (err: any) {
+      console.error('Failed to stage document on server:', err);
+      setStagedDocUploadStatus('error');
+      setStagedDocError(
+        err.response?.data?.message || 'Server upload failed. You can retry uploading the document.'
+      );
+    }
+  };
+
   const handleFilesSelected = async (
     selectedFiles: FileList | File[],
     autoTriggerImport = true
   ) => {
-    const allowedExtensions = ['.pdf', '.docx', '.xlsx', '.xls', '.jpg', '.jpeg', '.png'];
+    const allowedExtensions = ['.pdf', '.docx', '.xlsx', '.xls', '.jpg', '.jpeg', '.png', '.webp'];
     const newFiles: File[] = [];
     const maxSizeBytes = 25 * 1024 * 1024; // 25 MB
 
@@ -222,7 +253,7 @@ export const SOPCreatePage: React.FC = () => {
       }
       if (!allowedExtensions.includes(ext)) {
         setError(
-          `File "${file.name}" has an unsupported format. Allowed: PDF, DOCX, XLSX, JPG, PNG.`
+          `File "${file.name}" has an unsupported format. Allowed: PDF, DOCX, XLSX, JPG, PNG, WEBP.`
         );
         continue;
       }
@@ -238,6 +269,18 @@ export const SOPCreatePage: React.FC = () => {
     if (newFiles.length > 0) {
       setAttachments((prev) => [...prev, ...newFiles]);
       setError(null);
+
+      // Select first eligible procedure document as primary preview file if none selected
+      const procedureCandidate = newFiles.find((f) => {
+        const ext = '.' + f.name.split('.').pop()?.toLowerCase();
+        return ['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp'].includes(ext);
+      });
+
+      const chosenFile = procedureCandidate || newFiles[0];
+      if (!primaryFile) {
+        setPrimaryFile(chosenFile);
+        stagePrimaryDocument(chosenFile);
+      }
 
       // Automatically trigger Smart Import Preview if a .docx or .pdf was selected
       if (autoTriggerImport) {
@@ -383,21 +426,26 @@ export const SOPCreatePage: React.FC = () => {
         changeSummary: importedSourceName
           ? `Imported from source document: ${importedSourceName}`
           : undefined,
+        stagedAttachmentIds: stagedDoc ? [stagedDoc.id] : undefined,
         participants,
       });
 
       const newSopId = res.data.sop?.id || res.data.data?.sop?.id || res.data.id;
       const newVersionId = res.data.version?.id || res.data.data?.version?.id;
 
-      // Upload queued attachments if any (retaining the original imported DOCX/PDF as official source attachment)
-      if (attachments.length > 0 && newVersionId) {
+      // Upload remaining queued attachments if any (excluding the primary document already committed via staging)
+      const remainingAttachments = stagedDoc
+        ? attachments.filter((a) => a !== primaryFile && a.name !== stagedDoc.originalFilename)
+        : attachments;
+
+      if (remainingAttachments.length > 0 && newVersionId) {
         setUploadStatus(
-          `Uploading ${attachments.length} attached SOP file${attachments.length > 1 ? 's' : ''}...`
+          `Uploading ${remainingAttachments.length} additional attached SOP file${remainingAttachments.length > 1 ? 's' : ''}...`
         );
 
         try {
           const formData = new FormData();
-          attachments.forEach((file) => {
+          remainingAttachments.forEach((file) => {
             formData.append('files', file);
           });
           await api.post(`/attachments/versions/${newVersionId}/batch`, formData, {
@@ -405,10 +453,10 @@ export const SOPCreatePage: React.FC = () => {
           });
         } catch {
           // Fallback to sequential uploads if batch route fails
-          for (let i = 0; i < attachments.length; i++) {
-            setUploadStatus(`Uploading file ${i + 1} of ${attachments.length}...`);
+          for (let i = 0; i < remainingAttachments.length; i++) {
+            setUploadStatus(`Uploading file ${i + 1} of ${remainingAttachments.length}...`);
             const singleFormData = new FormData();
-            singleFormData.append('file', attachments[i]);
+            singleFormData.append('file', remainingAttachments[i]);
             await api.post(`/attachments/versions/${newVersionId}`, singleFormData, {
               headers: { 'Content-Type': 'multipart/form-data' },
             });
@@ -551,151 +599,95 @@ export const SOPCreatePage: React.FC = () => {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* SOP File Upload & Smart Import Card */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                <UploadCloud className="w-4 h-4 text-blue-600" />
-                Smart Document Import & Controlled File Attachments
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Upload a Word (<strong>.docx</strong>) or <strong>.pdf</strong> (digital or scanned) file to automatically extract and populate the SOP fields below, while preserving the original file as an official attachment.
-              </p>
-            </div>
-            {attachments.length > 0 && (
-              <span className="self-start sm:self-auto px-2.5 py-1 text-xs font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                {attachments.length} file{attachments.length === 1 ? '' : 's'} queued
-              </span>
-            )}
-          </div>
+        {/* SOP Controlled Procedure Document & Real-Time Preview */}
+        <div className="space-y-4">
+          <SOPDocumentViewer
+            sopNumber={sopNumber || 'SOP-DRAFT'}
+            sopTitle={title || 'New Procedure Document'}
+            localFile={primaryFile}
+            stagedDocument={stagedDoc}
+            uploadStatus={stagedDocUploadStatus}
+            uploadErrorMessage={stagedDocError}
+            onFileSelect={(file) => {
+              handleFilesSelected([file], true);
+            }}
+            onRetryUpload={() => {
+              if (primaryFile) {
+                stagePrimaryDocument(primaryFile);
+              }
+            }}
+            onRemoveDocument={() => {
+              setPrimaryFile(null);
+              setStagedDoc(null);
+              setStagedDocUploadStatus('idle');
+              setStagedDocError(null);
+              setAttachments((prev) => prev.filter((f) => f !== primaryFile));
+            }}
+            isUnsavedDraft={true}
+          />
 
-          {/* Drag & Drop Zone */}
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-xl p-6 text-center cursor-pointer transition-all duration-200 flex flex-col items-center justify-center gap-2.5 ${
-              isDragging
-                ? 'border-blue-500 bg-blue-50/70 scale-[0.99]'
-                : 'border-slate-300 hover:border-blue-400 bg-slate-50/50 hover:bg-slate-50'
-            }`}
-          >
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg"
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  handleFilesSelected(e.target.files, true);
-                  e.target.value = '';
-                }
-              }}
-              className="hidden"
-            />
-            <div
-              className={`p-3 rounded-full ${
-                isDragging ? 'bg-blue-200 text-blue-700' : 'bg-blue-100 text-blue-600'
-              }`}
-            >
-              <UploadCloud className="w-6 h-6" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-slate-700">
-                <span className="text-blue-600 hover:underline">Click to browse</span> or drag and drop your SOP document (.docx / .pdf) here
-              </p>
-              <p className="text-[11px] text-slate-400 mt-0.5">
-                Uploading a <strong className="text-slate-600">.docx</strong> or <strong className="text-slate-600">.pdf</strong> automatically opens the Smart Auto-Fill Preview (Up to 25 MB)
-              </p>
-            </div>
-          </div>
-
-          {/* Queued Attachments List */}
-          {attachments.length > 0 && (
-            <div className="space-y-2.5 pt-2">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs font-semibold text-slate-600">
-                <span>Queued Source & Supporting Files ({attachments.length})</span>
-              </div>
-
+          {/* Supplementary Supporting Attachments */}
+          {attachments.filter((a) => a !== primaryFile).length > 0 && (
+            <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4 space-y-3">
+              <h3 className="text-xs font-bold text-slate-700 flex items-center gap-2">
+                <Paperclip className="w-4 h-4 text-blue-600" />
+                <span>Additional Supporting Files ({attachments.filter((a) => a !== primaryFile).length})</span>
+              </h3>
               <div className="divide-y divide-slate-100 border border-slate-200 rounded-lg overflow-hidden bg-white">
-                {attachments.map((file, idx) => {
-                  const ext = file.name.split('.').pop()?.toLowerCase();
-                  const isPdf = ext === 'pdf';
-                  const isDocx = ext === 'docx';
-                  const isExcel = ext === 'xlsx' || ext === 'xls';
-                  const isImg = ext === 'png' || ext === 'jpg' || ext === 'jpeg';
-                  const canSmartImport = isPdf || isDocx;
+                {attachments
+                  .filter((a) => a !== primaryFile)
+                  .map((file, idx) => {
+                    const ext = file.name.split('.').pop()?.toLowerCase();
+                    const isExcel = ext === 'xlsx' || ext === 'xls';
+                    const isImg = ['png', 'jpg', 'jpeg', 'webp'].includes(ext || '');
 
-                  return (
-                    <div
-                      key={`${file.name}-${idx}`}
-                      className="p-3 flex flex-wrap items-center justify-between gap-3 text-xs hover:bg-slate-50/70 transition-colors"
-                    >
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div
-                          className={`p-2 rounded-lg flex-shrink-0 ${
-                            isPdf
-                              ? 'bg-rose-50 text-rose-600'
-                              : isDocx
-                              ? 'bg-blue-50 text-blue-600'
-                              : isExcel
-                              ? 'bg-emerald-50 text-emerald-600'
-                              : isImg
-                              ? 'bg-purple-50 text-purple-600'
-                              : 'bg-slate-100 text-slate-600'
-                          }`}
-                        >
-                          {isPdf || isDocx ? (
-                            <FileText className="w-4 h-4" />
-                          ) : isExcel ? (
-                            <FileSpreadsheet className="w-4 h-4" />
-                          ) : isImg ? (
-                            <ImageIcon className="w-4 h-4" />
-                          ) : (
-                            <Paperclip className="w-4 h-4" />
-                          )}
+                    return (
+                      <div
+                        key={`${file.name}-${idx}`}
+                        className="p-3 flex items-center justify-between gap-3 text-xs hover:bg-slate-50 transition-colors"
+                      >
+                        <div className="flex items-center gap-2 min-w-0">
+                          <div className="p-2 bg-slate-100 text-slate-600 rounded-lg flex-shrink-0">
+                            {isExcel ? (
+                              <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                            ) : isImg ? (
+                              <ImageIcon className="w-4 h-4 text-purple-600" />
+                            ) : (
+                              <Paperclip className="w-4 h-4" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-slate-800 truncate">{file.name}</p>
+                            <p className="text-[11px] text-slate-400">
+                              {formatFileSize(file.size)} • Supplementary Supporting File
+                            </p>
+                          </div>
                         </div>
-                        <div className="min-w-0">
-                          <p className="font-semibold text-slate-800 truncate" title={file.name}>
-                            {file.name}
-                          </p>
-                          <p className="text-[11px] text-slate-400">
-                            {formatFileSize(file.size)} •{' '}
-                            <span className="text-emerald-600 font-medium">
-                              Retained as Official Source Attachment on Draft V1.0
-                            </span>
-                          </p>
-                        </div>
-                      </div>
 
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {canSmartImport && (
+                        <div className="flex items-center gap-2 flex-shrink-0">
                           <button
                             type="button"
-                            disabled={importingDoc}
-                            onClick={() => runSmartDocumentExtraction(file)}
-                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors disabled:opacity-50"
+                            onClick={() => {
+                              setPrimaryFile(file);
+                              stagePrimaryDocument(file);
+                            }}
+                            className="px-2.5 py-1 text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors"
                           >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            <span>
-                              {importingDoc ? 'Extracting...' : 'Smart Extract & Auto-Fill'}
-                            </span>
+                            Set as Primary Document
                           </button>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => removeAttachment(idx)}
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                          title="Remove file"
-                        >
-                          <X className="w-4 h-4" />
-                        </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAttachments((prev) => prev.filter((a) => a !== file));
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             </div>
           )}
@@ -839,47 +831,23 @@ export const SOPCreatePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Document Workflow & Electronic Signatures Integration */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
-          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <div>
-              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
-                <FileText className="w-4 h-4 text-blue-600" />
-                Document Workflow & Electronic Signatures
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Your uploaded Word (<strong>.docx</strong>) or <strong>.pdf</strong> file serves as the official controlled SOP document.
-              </p>
-            </div>
-            <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1">
-              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-              <span>21 CFR Part 11 Ready</span>
-            </span>
-          </div>
-
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-2">
-            <div className="font-semibold text-slate-800 flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-blue-600" />
-              <span>Full In-Browser Document Preview & Electronic Signing Enabled</span>
-            </div>
-            <p className="leading-relaxed">
-              Upon creating this SOP draft, you and designated department approvers can view the document natively in-browser with zoom, print, and full-screen controls, and apply verified electronic signatures directly with cryptographic SHA-256 hash tracking.
-            </p>
-          </div>
-
-          {/* Optional Explanatory Notes / Abstract */}
+        {/* Optional Explanatory Notes / Abstract */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-3">
           <div>
             <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
               Explanatory Notes / Abstract (Optional)
             </label>
-            <textarea
-              rows={3}
-              placeholder="Optional overview or administrative summary for this procedure..."
-              value={procedure}
-              onChange={(e) => setProcedure(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
+            <p className="text-xs text-slate-500 mb-2">
+              Optional administrative overview or remarks to accompany the official document attachment.
+            </p>
           </div>
+          <textarea
+            rows={3}
+            placeholder="Optional overview or administrative summary for this procedure..."
+            value={procedure}
+            onChange={(e) => setProcedure(e.target.value)}
+            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
+          />
         </div>
 
         {/* Department Participation Matrix Configuration */}

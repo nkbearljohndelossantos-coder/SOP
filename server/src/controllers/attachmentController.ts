@@ -24,9 +24,32 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'image/jpeg',
   'image/png',
+  'image/webp',
 ]);
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.jpg', '.jpeg', '.png']);
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.docx', '.xlsx', '.jpg', '.jpeg', '.png', '.webp']);
+
+export interface StagedAttachmentRecord {
+  id: string;
+  originalFilename: string;
+  storedFilename: string;
+  mimeType: string;
+  fileSize: number;
+  uploadedById: string;
+  fileHash: string;
+  createdAt: Date;
+}
+
+// In-memory registry for files staged prior to SOP creation
+export const stagedAttachments = new Map<string, StagedAttachmentRecord>();
+
+export function consumeStagedAttachment(id: string): StagedAttachmentRecord | undefined {
+  const record = stagedAttachments.get(id);
+  if (record) {
+    stagedAttachments.delete(id);
+  }
+  return record;
+}
 
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
@@ -54,6 +77,51 @@ export const uploadMiddleware = multer({
 });
 
 export const uploadMultipleMiddleware = uploadMiddleware.array('files', 10);
+
+export async function stageAttachment(req: Request, res: Response) {
+  if (!req.file) {
+    return res.status(400).json({ success: false, message: 'No file uploaded.' });
+  }
+
+  const fileHash = computeFileHash(req.file.path);
+  const stagedId = `staged-${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+
+  const record: StagedAttachmentRecord = {
+    id: stagedId,
+    originalFilename: req.file.originalname,
+    storedFilename: req.file.filename,
+    mimeType: req.file.mimetype,
+    fileSize: req.file.size,
+    uploadedById: req.user!.id,
+    fileHash,
+    createdAt: new Date(),
+  };
+
+  stagedAttachments.set(stagedId, record);
+
+  await logAudit({
+    userId: req.user?.id,
+    action: 'ATTACHMENT_STAGED',
+    entity: 'SOPAttachment',
+    entityId: stagedId,
+    newValue: { filename: record.originalFilename, size: record.fileSize, hash: fileHash },
+    ipAddress: req.ip,
+  });
+
+  return res.status(201).json({
+    success: true,
+    data: {
+      id: stagedId,
+      originalFilename: record.originalFilename,
+      storedFilename: record.storedFilename,
+      mimeType: record.mimeType,
+      fileSize: record.fileSize,
+      documentHash: fileHash,
+      isStaged: true,
+      downloadUrl: `/api/attachments/${stagedId}/download`,
+    },
+  });
+}
 
 export async function uploadMultipleAttachments(req: Request, res: Response) {
   const { versionId } = req.params;
@@ -100,6 +168,23 @@ export async function uploadMultipleAttachments(req: Request, res: Response) {
     });
 
     createdAttachments.push(attachment);
+  }
+
+  // If the version doesn't have a primary attachment yet, associate the first eligible procedure document
+  const primaryCandidate = createdAttachments.find((att) => {
+    const ext = path.extname(att.originalFilename).toLowerCase();
+    return ['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.webp', '.doc'].includes(ext);
+  });
+  if (primaryCandidate && !version.primaryAttachmentId) {
+    const filePath = path.join(uploadDir, primaryCandidate.storedFilename);
+    const hash = fs.existsSync(filePath) ? computeFileHash(filePath) : null;
+    await prisma.sOPVersion.update({
+      where: { id: versionId },
+      data: {
+        primaryAttachmentId: primaryCandidate.id,
+        ...(hash ? { documentHash: hash } : {}),
+      },
+    });
   }
 
   return res.status(201).json({
@@ -189,12 +274,28 @@ export async function uploadAttachment(req: Request, res: Response) {
 export async function downloadAttachment(req: Request, res: Response) {
   const { id } = req.params;
 
-  const attachment = await prisma.sOPAttachment.findUnique({ where: { id } });
-  if (!attachment) {
-    return res.status(404).json({ success: false, message: 'Attachment not found.' });
+  let filePath: string | null = null;
+  let originalFilename = 'document';
+  let mimeType = 'application/octet-stream';
+
+  if (id.startsWith('staged-')) {
+    const staged = stagedAttachments.get(id);
+    if (!staged) {
+      return res.status(404).json({ success: false, message: 'Staged attachment expired or not found.' });
+    }
+    filePath = path.join(uploadDir, staged.storedFilename);
+    originalFilename = staged.originalFilename;
+    mimeType = staged.mimeType;
+  } else {
+    const attachment = await prisma.sOPAttachment.findUnique({ where: { id } });
+    if (!attachment) {
+      return res.status(404).json({ success: false, message: 'Attachment not found.' });
+    }
+    filePath = path.join(uploadDir, attachment.storedFilename);
+    originalFilename = attachment.originalFilename;
+    mimeType = attachment.mimeType;
   }
 
-  const filePath = path.join(uploadDir, attachment.storedFilename);
   if (!fs.existsSync(filePath)) {
     return res.status(404).json({ success: false, message: 'File not found on server storage.' });
   }
@@ -202,10 +303,10 @@ export async function downloadAttachment(req: Request, res: Response) {
   const isInline = req.query.inline === 'true';
   const disposition = isInline ? 'inline' : 'attachment';
 
-  res.setHeader('Content-Type', attachment.mimeType);
+  res.setHeader('Content-Type', mimeType);
   res.setHeader(
     'Content-Disposition',
-    `${disposition}; filename="${encodeURIComponent(attachment.originalFilename)}"`
+    `${disposition}; filename="${encodeURIComponent(originalFilename)}"`
   );
 
   const stream = fs.createReadStream(filePath);
@@ -214,6 +315,27 @@ export async function downloadAttachment(req: Request, res: Response) {
 
 export async function getAttachmentInfo(req: Request, res: Response) {
   const { id } = req.params;
+
+  if (id.startsWith('staged-')) {
+    const staged = stagedAttachments.get(id);
+    if (!staged) {
+      return res.status(404).json({ success: false, message: 'Staged attachment expired or not found.' });
+    }
+    const filePath = path.join(uploadDir, staged.storedFilename);
+    return res.json({
+      success: true,
+      data: {
+        id: staged.id,
+        originalFilename: staged.originalFilename,
+        storedFilename: staged.storedFilename,
+        mimeType: staged.mimeType,
+        fileSize: staged.fileSize,
+        documentHash: staged.fileHash,
+        isStaged: true,
+        existsOnDisk: fs.existsSync(filePath),
+      },
+    });
+  }
 
   const attachment = await prisma.sOPAttachment.findUnique({
     where: { id },
