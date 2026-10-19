@@ -109,15 +109,13 @@ def main():
             rm -f {remote_zip}
         """)
 
-        # Commit & Push to GitHub from /root/SOP
-        log("Pushing updates to GitHub...")
+        log("Synchronizing GitHub repository at /root/SOP...")
         run_ssh_cmd(client, f"""
             cd {REMOTE_GIT_DIR} &&
             git config user.name "nkbearljohndelossantos-coder" &&
             git config user.email "earljohndelossantos@nkbmanufacturing.com" &&
-            git add -A &&
-            (git commit -m "feat: add professional SOP file upload capability during SOP creation" || true) &&
-            git push origin main
+            git fetch origin main &&
+            git reset --hard origin/main
         """)
 
         # Rebuild docker container with --no-cache
