@@ -17,6 +17,23 @@ import {
   Check,
 } from 'lucide-react';
 
+export interface PdfSignaturePlacement {
+  pageNumber: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PdfAnnotation {
+  id?: string;
+  pageNumber: number;
+  x: number;
+  y: number;
+  text: string;
+  fontSize?: number;
+}
+
 interface SOPElectronicSignatureModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -25,6 +42,8 @@ interface SOPElectronicSignatureModalProps {
   onSignatureComplete: (signature: SOPElectronicSignature) => void;
   defaultWorkflowStep?: string;
   targetDepartmentId?: string;
+  placement?: PdfSignaturePlacement | null;
+  annotations?: PdfAnnotation[] | null;
 }
 
 export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalProps> = ({
@@ -35,6 +54,8 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
   onSignatureComplete,
   defaultWorkflowStep,
   targetDepartmentId,
+  placement,
+  annotations,
 }) => {
   const { user, isAdmin } = useAuth();
 
@@ -205,14 +226,36 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
 
     try {
       setSubmitting(true);
-      const res = await api.post(`/workflow/versions/${version.id}/sign`, {
+      const payload: any = {
         signatureMethod: activeMethod,
         signatureData,
         declarationText: defaultDeclaration,
         password: password.trim() ? password : undefined,
         departmentId: selectedDeptId || undefined,
         workflowStep,
-      });
+      };
+
+      if (placement) {
+        payload.placement = {
+          pageNumber: placement.pageNumber,
+          x: placement.x,
+          y: placement.y,
+          width: placement.width,
+          height: placement.height,
+        };
+      }
+
+      if (annotations && annotations.length > 0) {
+        payload.annotations = annotations.map((a) => ({
+          pageNumber: a.pageNumber,
+          x: a.x,
+          y: a.y,
+          text: a.text,
+          fontSize: a.fontSize,
+        }));
+      }
+
+      const res = await api.post(`/workflow/versions/${version.id}/sign`, payload);
 
       if (res.data?.success) {
         onSignatureComplete(res.data.data.signature);
@@ -258,6 +301,29 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
             </p>
           </div>
         </div>
+
+        {/* Embedded PDF Placement Details (if placed via PDF editor) */}
+        {placement && (
+          <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl flex items-center justify-between text-emerald-900">
+            <div className="flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-emerald-600 flex-shrink-0" />
+              <div>
+                <span className="font-bold">Physical PDF Placement Configured:</span>{' '}
+                <span>
+                  Page <strong>{placement.pageNumber}</strong> at ({Math.round(placement.x * 100)}%, {Math.round(placement.y * 100)}%) • Size {Math.round(placement.width * 100)}% × {Math.round(placement.height * 100)}%
+                </span>
+                <p className="text-[10px] text-emerald-700 mt-0.5">
+                  Signature stamp, signer identity, role, and compliance banner will be physically embedded into the PDF bytes.
+                </p>
+              </div>
+            </div>
+            {annotations && annotations.length > 0 && (
+              <span className="text-[10px] bg-emerald-200/70 text-emerald-950 font-semibold px-2 py-0.5 rounded-full">
+                +{annotations.length} Annotation{annotations.length > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+        )}
 
         {error && (
           <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-start gap-2">

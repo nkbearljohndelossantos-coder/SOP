@@ -4,6 +4,7 @@ import {
   getVersionSignatures,
   revokeSignature,
   signDocumentVersion,
+  savePdfDraftAnnotations,
 } from '../services/electronicSignatureService';
 
 const signDocumentSchema = z.object({
@@ -14,6 +15,42 @@ const signDocumentSchema = z.object({
   departmentId: z.string().optional(),
   workflowStep: z.string().optional(),
   metadata: z.string().optional(),
+  placement: z
+    .object({
+      pageNumber: z.number().int().min(1),
+      x: z.number().min(0).max(1),
+      y: z.number().min(0).max(1),
+      width: z.number().min(0.01).max(1),
+      height: z.number().min(0.01).max(1),
+    })
+    .optional(),
+  annotations: z
+    .array(
+      z.object({
+        type: z.enum(['text', 'date']),
+        pageNumber: z.number().int().min(1),
+        x: z.number().min(0).max(1),
+        y: z.number().min(0).max(1),
+        text: z.string().min(1),
+        fontSize: z.number().optional(),
+      })
+    )
+    .optional(),
+});
+
+const editPdfSchema = z.object({
+  annotations: z
+    .array(
+      z.object({
+        type: z.enum(['text', 'date']),
+        pageNumber: z.number().int().min(1),
+        x: z.number().min(0).max(1),
+        y: z.number().min(0).max(1),
+        text: z.string().min(1),
+        fontSize: z.number().optional(),
+      })
+    )
+    .min(1, 'At least one annotation is required'),
 });
 
 const revokeSignatureSchema = z.object({
@@ -34,7 +71,25 @@ export async function handleSignDocument(req: Request, res: Response) {
 
   return res.status(201).json({
     success: true,
-    message: 'Document successfully signed electronically with verified audit record.',
+    message: 'Document successfully signed electronically with verified audit record and embedded PDF bytes.',
+    data: result,
+  });
+}
+
+export async function handleEditPdfDocument(req: Request, res: Response) {
+  const { versionId } = req.params;
+  const { annotations } = editPdfSchema.parse(req.body);
+
+  const result = await savePdfDraftAnnotations(
+    versionId,
+    req.user!.id,
+    annotations,
+    req.ip
+  );
+
+  return res.json({
+    success: true,
+    message: 'PDF annotations successfully embedded into document draft.',
     data: result,
   });
 }

@@ -8,6 +8,12 @@ import { ApprovalDecisions, ParticipantStatuses, ParticipationTypes, Roles, SOPS
 import { logAudit } from './auditService';
 import { notifyConcernedUsers } from './notificationService';
 import { calculateApprovalMatrix } from './sopService';
+import {
+  embedSignatureIntoPdf,
+  embedAnnotationsIntoPdf,
+  SignaturePlacement,
+  PdfAnnotation,
+} from './pdfEditorService';
 
 const uploadDir = path.resolve(env.UPLOAD_DIR);
 
@@ -19,6 +25,8 @@ export interface SignDocumentInput {
   departmentId?: string;
   workflowStep?: string;
   metadata?: string;
+  placement?: SignaturePlacement;
+  annotations?: PdfAnnotation[];
 }
 
 export async function signDocumentVersion(
@@ -113,10 +121,7 @@ export async function signDocumentVersion(
 
   // Verify document integrity against any existing valid signatures
   if (version.signatures.length > 0) {
-    const mismatchedSig = version.signatures.find(
-      (s) => s.documentHash && s.documentHash !== actualDocumentHash
-    );
-    if (mismatchedSig) {
+    if (version.documentHash && actualDocumentHash && version.documentHash !== actualDocumentHash) {
       throw new Error(
         'Document tampering detected: the document file hash has changed since previous valid electronic signatures were affixed.'
       );
@@ -159,14 +164,77 @@ export async function signDocumentVersion(
     throw new Error('You have already applied a valid electronic signature for this workflow step.');
   }
 
-  // 6. Database Transaction
+  // 6. If primary attachment is a PDF, embed the electronic signature into the PDF file bytes
+  let signedPdfAttachmentId: string | null = null;
+  let signedPdfHash: string | null = null;
+  let pdfPlacementMeta: any = null;
+  let signedFilename: string | null = null;
+  let signedBytesBuffer: Buffer | null = null;
+
+  if (primaryAttachment && primaryAttachment.originalFilename.toLowerCase().endsWith('.pdf')) {
+    const filePath = path.join(uploadDir, primaryAttachment.storedFilename);
+    if (fs.existsSync(filePath)) {
+      const origPdfBytes = fs.readFileSync(filePath);
+      const embedResult = await embedSignatureIntoPdf(
+        origPdfBytes,
+        input.signatureMethod,
+        input.signatureData,
+        {
+          name: user.fullName,
+          role: user.role,
+          department: user.department?.name || 'Department',
+          date: new Date(),
+          originalHash: actualDocumentHash!,
+          workflowStep,
+        },
+        input.placement,
+        input.annotations
+      );
+
+      signedFilename = `sop-signed-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.pdf`;
+      const signedPath = path.join(uploadDir, signedFilename);
+      fs.writeFileSync(signedPath, embedResult.signedBytes);
+
+      signedBytesBuffer = embedResult.signedBytes;
+      signedPdfHash = embedResult.signedHash;
+      pdfPlacementMeta = {
+        placement: embedResult.actualPlacement,
+        originalDocumentHash: actualDocumentHash,
+        signedDocumentHash: embedResult.signedHash,
+        pageCount: embedResult.pageCount,
+        embeddedAt: new Date().toISOString(),
+      };
+    }
+  }
+
+  // 7. Database Transaction
   const createdSignature = await prisma.$transaction(async (tx) => {
+    let activeAttachmentId = primaryAttachment?.id || null;
+
+    if (signedPdfHash && signedFilename && signedBytesBuffer) {
+      // Create new immutable attachment record for the signed PDF artifact
+      const signedAtt = await tx.sOPAttachment.create({
+        data: {
+          sopVersionId: version.id,
+          originalFilename: primaryAttachment!.originalFilename.startsWith('Signed_')
+            ? primaryAttachment!.originalFilename
+            : `Signed_${primaryAttachment!.originalFilename}`,
+          storedFilename: signedFilename,
+          mimeType: 'application/pdf',
+          fileSize: signedBytesBuffer.length,
+          uploadedById: user.id,
+        },
+      });
+      activeAttachmentId = signedAtt.id;
+      signedPdfAttachmentId = signedAtt.id;
+    }
+
     // Create the signature record
     const sig = await tx.sOPElectronicSignature.create({
       data: {
         sopVersionId: version.id,
         sopId: version.sopId,
-        attachmentId: primaryAttachment?.id || null,
+        attachmentId: activeAttachmentId,
         signerUserId: user.id,
         signerName: user.fullName,
         signerEmail: user.email,
@@ -182,17 +250,17 @@ export async function signDocumentVersion(
         workflowStep,
         ipAddress: ipAddress || null,
         userAgent: userAgent || null,
-        metadata: input.metadata || null,
+        metadata: pdfPlacementMeta ? JSON.stringify(pdfPlacementMeta) : (input.metadata || null),
         status: 'VALID',
       },
     });
 
-    // Update version documentHash if not already set
+    // Update version documentHash if not already set or updated to signed hash
     await tx.sOPVersion.update({
       where: { id: version.id },
       data: {
-        documentHash: actualDocumentHash,
-        primaryAttachmentId: primaryAttachment?.id || version.primaryAttachmentId,
+        documentHash: signedPdfHash || actualDocumentHash,
+        primaryAttachmentId: activeAttachmentId || version.primaryAttachmentId,
         signatureStatus: 'PARTIALLY_SIGNED',
       },
     });
@@ -375,4 +443,91 @@ export async function getVersionSignatures(versionId: string) {
   });
 
   return signatures;
+}
+
+/**
+ * Saves draft annotations into a PDF without executing a legal electronic signature.
+ */
+export async function savePdfDraftAnnotations(
+  versionId: string,
+  userId: string,
+  annotations: PdfAnnotation[],
+  ipAddress?: string
+) {
+  const user = await prisma.user.findUnique({ where: { id: userId } });
+  if (!user || !user.isActive) throw new Error('Unauthorized or inactive account.');
+
+  const version = await prisma.sOPVersion.findUnique({
+    where: { id: versionId },
+    include: { attachments: true, sop: true },
+  });
+  if (!version) throw new Error('SOP Version not found.');
+  if (version.isFinalized) throw new Error('Cannot edit a finalized SOP.');
+
+  let primaryAttachment = version.attachments.find((a) => a.id === version.primaryAttachmentId);
+  if (!primaryAttachment) {
+    primaryAttachment = [...version.attachments]
+      .filter((a) => a.originalFilename.toLowerCase().endsWith('.pdf'))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())[0];
+  }
+
+  if (!primaryAttachment || !primaryAttachment.originalFilename.toLowerCase().endsWith('.pdf')) {
+    throw new Error('SOP Version does not have a primary PDF document to annotate.');
+  }
+
+  const filePath = path.join(uploadDir, primaryAttachment.storedFilename);
+  if (!fs.existsSync(filePath)) {
+    throw new Error('PDF file not found in storage.');
+  }
+
+  const pdfBytes = fs.readFileSync(filePath);
+  const result = await embedAnnotationsIntoPdf(pdfBytes, annotations);
+
+  const editedFilename = `sop-draft-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.pdf`;
+  const editedPath = path.join(uploadDir, editedFilename);
+  fs.writeFileSync(editedPath, result.editedBytes);
+
+  const newAttachment = await prisma.$transaction(async (tx) => {
+    const att = await tx.sOPAttachment.create({
+      data: {
+        sopVersionId: version.id,
+        originalFilename: primaryAttachment!.originalFilename.startsWith('Annotated_')
+          ? primaryAttachment!.originalFilename
+          : `Annotated_${primaryAttachment!.originalFilename}`,
+        storedFilename: editedFilename,
+        mimeType: 'application/pdf',
+        fileSize: result.editedBytes.length,
+        uploadedById: user.id,
+      },
+    });
+
+    await tx.sOPVersion.update({
+      where: { id: version.id },
+      data: {
+        primaryAttachmentId: att.id,
+        documentHash: result.editedHash,
+      },
+    });
+
+    return att;
+  });
+
+  await logAudit({
+    userId,
+    action: 'PDF_DRAFT_ANNOTATIONS_SAVED',
+    entity: 'SOPVersion',
+    entityId: version.id,
+    oldValue: { attachmentId: primaryAttachment.id, hash: version.documentHash },
+    newValue: {
+      attachmentId: newAttachment.id,
+      hash: result.editedHash,
+      annotationCount: annotations.length,
+    },
+    ipAddress,
+  });
+
+  return {
+    attachment: newAttachment,
+    documentHash: result.editedHash,
+  };
 }

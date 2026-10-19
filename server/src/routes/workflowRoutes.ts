@@ -15,6 +15,7 @@ import {
   handleGetVersionSignatures,
   handleRevokeSignature,
   handleSignDocument,
+  handleEditPdfDocument,
 } from '../controllers/signatureController';
 import { authenticateToken } from '../middleware/auth';
 import { requireDepartmentAuthorization, requirePermission } from '../middleware/rbac';
@@ -124,9 +125,11 @@ finalizeRoutes.forEach((path) => {
   router.post(path, requirePermission(Permissions.SOP_FINALIZE), asyncHandler(handleFinalizeSOP));
 });
 
-// Electronic Signatures
+// Electronic Signatures & PDF Editing
 router.post('/versions/:versionId/sign', asyncHandler(handleSignDocument));
 router.post('/:versionId/sign', asyncHandler(handleSignDocument));
+router.post('/versions/:versionId/edit-pdf', asyncHandler(handleEditPdfDocument));
+router.post('/:versionId/edit-pdf', asyncHandler(handleEditPdfDocument));
 router.get('/versions/:versionId/signatures', asyncHandler(handleGetVersionSignatures));
 router.get('/:versionId/signatures', asyncHandler(handleGetVersionSignatures));
 router.post('/signatures/:signatureId/revoke', asyncHandler(handleRevokeSignature));

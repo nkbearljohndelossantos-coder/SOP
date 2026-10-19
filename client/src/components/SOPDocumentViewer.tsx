@@ -36,7 +36,15 @@ import {
   Scan,
   Layout,
   ExternalLink,
+  Move,
+  Edit3,
+  MousePointer,
+  Type,
+  Save,
+  Plus,
+  CheckCheck,
 } from 'lucide-react';
+import { PdfSignaturePlacement, PdfAnnotation } from './SOPElectronicSignatureModal';
 
 // Configure PDF.js worker
 if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
@@ -74,17 +82,49 @@ export interface SOPDocumentViewerProps {
 }
 
 /**
- * Dedicated Multi-Page PDF Canvas Page Component
- * Renders an individual page with high-DPI scaling and page headers
+ * Dedicated Multi-Page PDF Canvas Page Component with Real-Time Interactive Editor
+ * Supports drag & drop signature positioning, resizing, and text/date annotations.
  */
-const PdfPageItem: React.FC<{
+interface PdfPageItemProps {
   pdfDoc: any;
   pageNum: number;
   zoomLevel: number;
-}> = ({ pdfDoc, pageNum, zoomLevel }) => {
+  isEditorMode: boolean;
+  activeTool: 'pointer' | 'signature' | 'text' | 'date';
+  signaturePlacement: PdfSignaturePlacement | null;
+  onUpdateSignaturePlacement: (placement: PdfSignaturePlacement | null) => void;
+  annotations: PdfAnnotation[];
+  onAddAnnotation: (ann: PdfAnnotation) => void;
+  onUpdateAnnotation: (id: string, updates: Partial<PdfAnnotation>) => void;
+  onRemoveAnnotation: (id: string) => void;
+  signerName?: string;
+  signerRole?: string;
+  signerDept?: string;
+}
+
+const PdfPageItem: React.FC<PdfPageItemProps> = ({
+  pdfDoc,
+  pageNum,
+  zoomLevel,
+  isEditorMode,
+  activeTool,
+  signaturePlacement,
+  onUpdateSignaturePlacement,
+  annotations,
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onRemoveAnnotation,
+  signerName,
+  signerRole,
+  signerDept,
+}) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const pageWrapperRef = useRef<HTMLDivElement | null>(null);
   const renderTaskRef = useRef<any>(null);
   const [rendering, setRendering] = useState(true);
+  const [isDraggingBox, setIsDraggingBox] = useState(false);
+
+  const isSigOnThisPage = signaturePlacement?.pageNumber === pageNum;
 
   useEffect(() => {
     let active = true;
@@ -146,18 +186,284 @@ const PdfPageItem: React.FC<{
     };
   }, [pdfDoc, pageNum, zoomLevel]);
 
+  // Page click: Place signature or create text / date annotation
+  const handlePageClick = (e: React.MouseEvent) => {
+    if (!isEditorMode || !pageWrapperRef.current) return;
+    const rect = pageWrapperRef.current.getBoundingClientRect();
+    const clickX = (e.clientX - rect.left) / rect.width;
+    const clickY = (e.clientY - rect.top) / rect.height;
+
+    if (activeTool === 'signature') {
+      const width = signaturePlacement?.width || 0.44;
+      const height = signaturePlacement?.height || 0.14;
+      const newX = Math.max(0, Math.min(1 - width, clickX - width / 2));
+      const newY = Math.max(0, Math.min(1 - height, clickY - height / 2));
+
+      onUpdateSignaturePlacement({
+        pageNumber: pageNum,
+        x: Math.round(newX * 1000) / 1000,
+        y: Math.round(newY * 1000) / 1000,
+        width,
+        height,
+      });
+    } else if (activeTool === 'text') {
+      onAddAnnotation({
+        id: `ann-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        pageNumber: pageNum,
+        x: Math.round(Math.max(0, Math.min(0.85, clickX)) * 1000) / 1000,
+        y: Math.round(Math.max(0, Math.min(0.95, clickY)) * 1000) / 1000,
+        text: 'Reviewed and Approved',
+        fontSize: 11,
+      });
+    } else if (activeTool === 'date') {
+      onAddAnnotation({
+        id: `ann-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        pageNumber: pageNum,
+        x: Math.round(Math.max(0, Math.min(0.85, clickX)) * 1000) / 1000,
+        y: Math.round(Math.max(0, Math.min(0.95, clickY)) * 1000) / 1000,
+        text: format(new Date(), 'yyyy-MM-dd'),
+        fontSize: 11,
+      });
+    }
+  };
+
+  // Dragging the Signature Placement Box
+  const handleMouseDownDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!pageWrapperRef.current || !signaturePlacement) return;
+
+    const rect = pageWrapperRef.current.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const initialX = signaturePlacement.x;
+    const initialY = signaturePlacement.y;
+    const boxW = signaturePlacement.width;
+    const boxH = signaturePlacement.height;
+
+    setIsDraggingBox(true);
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const dx = (moveEvent.clientX - startX) / rect.width;
+      const dy = (moveEvent.clientY - startY) / rect.height;
+
+      const newX = Math.max(0, Math.min(1 - boxW, initialX + dx));
+      const newY = Math.max(0, Math.min(1 - boxH, initialY + dy));
+
+      onUpdateSignaturePlacement({
+        ...signaturePlacement,
+        pageNumber: pageNum,
+        x: Math.round(newX * 1000) / 1000,
+        y: Math.round(newY * 1000) / 1000,
+      });
+    };
+
+    const onMouseUp = () => {
+      setIsDraggingBox(false);
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
+  // Resizing the Signature Placement Box (Bottom-Right Handle)
+  const handleMouseDownResize = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!pageWrapperRef.current || !signaturePlacement) return;
+
+    const rect = pageWrapperRef.current.getBoundingClientRect();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const initialW = signaturePlacement.width;
+    const initialH = signaturePlacement.height;
+    const posX = signaturePlacement.x;
+    const posY = signaturePlacement.y;
+
+    const onMouseMove = (moveEvent: MouseEvent) => {
+      const dw = (moveEvent.clientX - startX) / rect.width;
+      const dh = (moveEvent.clientY - startY) / rect.height;
+
+      const minW = 0.20;
+      const maxW = 1 - posX;
+      const minH = 0.08;
+      const maxH = 1 - posY;
+
+      const newW = Math.max(minW, Math.min(maxW, initialW + dw));
+      const newH = Math.max(minH, Math.min(maxH, initialH + dh));
+
+      onUpdateSignaturePlacement({
+        ...signaturePlacement,
+        pageNumber: pageNum,
+        width: Math.round(newW * 1000) / 1000,
+        height: Math.round(newH * 1000) / 1000,
+      });
+    };
+
+    const onMouseUp = () => {
+      window.removeEventListener('mousemove', onMouseMove);
+      window.removeEventListener('mouseup', onMouseUp);
+    };
+
+    window.addEventListener('mousemove', onMouseMove);
+    window.addEventListener('mouseup', onMouseUp);
+  };
+
   return (
     <div className="pdf-page-card bg-white shadow-xl rounded-md mb-8 flex flex-col items-center border border-slate-300">
       <div className="bg-slate-100/90 border-b border-slate-200 w-full px-4 py-1.5 flex justify-between items-center text-[11px] font-mono text-slate-500">
-        <span className="font-semibold text-slate-700">Page {pageNum}</span>
-        {rendering && (
+        <span className="font-semibold text-slate-700 flex items-center gap-2">
+          <span>Page {pageNum}</span>
+          {isSigOnThisPage && (
+            <span className="bg-blue-600 text-white font-sans text-[10px] px-2 py-0.5 rounded-full font-bold flex items-center gap-1 shadow-xs">
+              <PenTool className="w-2.5 h-2.5" /> Signature Target
+            </span>
+          )}
+        </span>
+        {rendering ? (
           <span className="flex items-center gap-1 text-blue-600 font-sans">
             <Loader2 className="w-3 h-3 animate-spin" /> Rendering...
           </span>
-        )}
+        ) : isEditorMode ? (
+          <span className="text-[10px] text-blue-700 font-sans font-semibold">
+            {activeTool === 'signature'
+              ? 'Click anywhere on this page to position signature'
+              : activeTool === 'text'
+              ? 'Click on page to place text note'
+              : activeTool === 'date'
+              ? 'Click on page to stamp date'
+              : 'Interactive Editor Active'}
+          </span>
+        ) : null}
       </div>
+
       <div className="p-3 sm:p-6 bg-white flex justify-center w-full overflow-x-auto">
-        <canvas ref={canvasRef} className="max-w-full h-auto block shadow-sm" />
+        <div
+          ref={pageWrapperRef}
+          className="relative inline-block select-none"
+          style={{
+            cursor: !isEditorMode
+              ? 'default'
+              : activeTool === 'signature'
+              ? 'crosshair'
+              : activeTool === 'text' || activeTool === 'date'
+              ? 'text'
+              : 'default',
+          }}
+          onClick={handlePageClick}
+        >
+          <canvas ref={canvasRef} className="max-w-full h-auto block shadow-sm pointer-events-none" />
+
+          {/* Real-time Interactive Editor Overlay */}
+          {isEditorMode && (
+            <div className="absolute inset-0 pointer-events-auto">
+              {/* 1. Placed Annotations on this page */}
+              {annotations
+                .filter((a) => a.pageNumber === pageNum)
+                .map((ann) => (
+                  <div
+                    key={ann.id}
+                    style={{
+                      left: `${ann.x * 100}%`,
+                      top: `${ann.y * 100}%`,
+                    }}
+                    className="absolute z-20 group -translate-y-1/2 flex items-center gap-1 bg-amber-50/95 border border-amber-400 text-slate-900 px-2 py-0.5 rounded shadow-sm hover:ring-2 hover:ring-amber-400"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <input
+                      type="text"
+                      value={ann.text}
+                      onChange={(e) => onUpdateAnnotation(ann.id!, { text: e.target.value })}
+                      className="bg-transparent border-none outline-none text-xs font-semibold text-slate-900 min-w-[70px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onRemoveAnnotation(ann.id!);
+                      }}
+                      className="text-slate-400 hover:text-rose-600 p-0.5"
+                      title="Delete annotation"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ))}
+
+              {/* 2. Interactive Signature Stamp Box if placed on this page */}
+              {isSigOnThisPage && (
+                <div
+                  style={{
+                    left: `${signaturePlacement!.x * 100}%`,
+                    top: `${signaturePlacement!.y * 100}%`,
+                    width: `${signaturePlacement!.width * 100}%`,
+                    height: `${signaturePlacement!.height * 100}%`,
+                  }}
+                  className={`absolute z-30 select-none bg-blue-50/95 border-2 border-blue-600 rounded-lg shadow-lg flex flex-col justify-between p-2 cursor-move transition-shadow ${
+                    isDraggingBox ? 'ring-4 ring-blue-400/50 shadow-2xl opacity-90' : 'hover:border-blue-700'
+                  }`}
+                  onMouseDown={handleMouseDownDrag}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {/* Top Bar of Signature Stamp */}
+                  <div className="flex items-center justify-between text-[10px] text-blue-900 border-b border-blue-200 pb-1 pointer-events-none">
+                    <span className="font-bold flex items-center gap-1">
+                      <ShieldCheck className="w-3.5 h-3.5 text-blue-700" />
+                      <span>21 CFR Part 11 Signature Stamp</span>
+                    </span>
+                    <div className="flex items-center gap-1 pointer-events-auto">
+                      <span className="font-mono text-[9px] bg-blue-200 text-blue-950 px-1 py-0.5 rounded font-semibold">
+                        Page {pageNum}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onUpdateSignaturePlacement(null);
+                        }}
+                        className="text-slate-500 hover:text-rose-600 p-0.5"
+                        title="Remove placement"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Body: Signer Identity Preview */}
+                  <div className="flex-1 flex flex-col justify-center my-0.5 pointer-events-none">
+                    <div className="font-serif italic text-sm sm:text-base text-blue-950 leading-tight truncate font-semibold">
+                      {signerName || 'Authorized Signer'}
+                    </div>
+                    <div className="text-[10px] text-slate-600 truncate">
+                      {signerRole || 'Role'} • {signerDept || 'Department'}
+                    </div>
+                    <div className="text-[9px] font-mono text-slate-500 truncate">
+                      {format(new Date(), 'yyyy-MM-dd HH:mm:ss')} UTC • Physical Embed
+                    </div>
+                  </div>
+
+                  {/* Bottom Bar: Drag and Resize Hints */}
+                  <div className="flex items-center justify-between text-[9px] text-blue-700 pt-0.5 border-t border-blue-200 pointer-events-none">
+                    <span className="flex items-center gap-0.5 font-medium">
+                      <Move className="w-2.5 h-2.5" /> Drag box to position
+                    </span>
+
+                    {/* Resize Handle (bottom-right corner) */}
+                    <div
+                      className="pointer-events-auto cursor-se-resize p-1 -mr-1 -mb-1 text-blue-600 hover:text-blue-900"
+                      onMouseDown={handleMouseDownResize}
+                      title="Drag to resize signature block"
+                    >
+                      <div className="w-2.5 h-2.5 border-r-2 border-b-2 border-blue-600" />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -252,6 +558,66 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
   const [isDragging, setIsDragging] = useState<boolean>(false);
   const [internalUploading, setInternalUploading] = useState<boolean>(false);
   const [internalUploadError, setInternalUploadError] = useState<string | null>(null);
+
+  // Interactive PDF Editor & Electronic Signature Placement State
+  const [isPdfEditorMode, setIsPdfEditorMode] = useState<boolean>(false);
+  const [activeEditorTool, setActiveEditorTool] = useState<'pointer' | 'signature' | 'text' | 'date'>('signature');
+  const [signaturePlacement, setSignaturePlacement] = useState<PdfSignaturePlacement | null>(null);
+  const [annotations, setAnnotations] = useState<PdfAnnotation[]>([]);
+  const [isSavingDraftAnnotations, setIsSavingDraftAnnotations] = useState<boolean>(false);
+  const [draftAnnotationsSuccess, setDraftAnnotationsSuccess] = useState<boolean>(false);
+  const [draftAnnotationsError, setDraftAnnotationsError] = useState<string | null>(null);
+
+  // Toggle editor mode and initialize placement
+  const handleToggleEditorMode = () => {
+    if (!isPdfEditorMode) {
+      setIsPdfEditorMode(true);
+      setActiveEditorTool('signature');
+      // If no placement yet, place default signature stamp on the last page or page 1
+      if (!signaturePlacement && pdfPageNumbers.length > 0) {
+        const targetPage = pdfPageNumbers[pdfPageNumbers.length - 1] || 1;
+        setSignaturePlacement({
+          pageNumber: targetPage,
+          x: 0.52,
+          y: 0.78,
+          width: 0.44,
+          height: 0.14,
+        });
+      }
+    } else {
+      setIsPdfEditorMode(false);
+    }
+  };
+
+  // Save annotations draft without executing electronic signature
+  const handleSaveDraftAnnotations = async () => {
+    if (!version?.id || annotations.length === 0) return;
+    try {
+      setIsSavingDraftAnnotations(true);
+      setDraftAnnotationsError(null);
+      await api.post(`/workflow/versions/${version.id}/edit-pdf`, {
+        annotations: annotations.map((a) => ({
+          pageNumber: a.pageNumber,
+          x: a.x,
+          y: a.y,
+          text: a.text,
+          fontSize: a.fontSize || 10,
+        })),
+      });
+      setDraftAnnotationsSuccess(true);
+      setTimeout(() => setDraftAnnotationsSuccess(false), 3500);
+      if (onRefresh) {
+        await onRefresh();
+      }
+    } catch (err: any) {
+      console.error('Failed to save draft annotations:', err);
+      setDraftAnnotationsError(
+        err.response?.data?.message || 'Failed to save PDF annotations.'
+      );
+    } finally {
+      setIsSavingDraftAnnotations(false);
+    }
+  };
 
   // 1. PDF Parsing & Loading (Supports both continuous page rendering & fallback embed)
   useEffect(() => {
@@ -815,14 +1181,16 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
 
-            {/* PDF View Mode Toggle (Continuous Page Reader vs Native Browser Embed) */}
+            {/* PDF View Mode Toggle & Interactive PDF Editor */}
             {isPdf && pdfUrl && (
-              <div className="ml-3 pl-3 border-l border-slate-300 dark:border-slate-600 flex items-center gap-1">
+              <div className="ml-3 pl-3 border-l border-slate-300 dark:border-slate-600 flex items-center gap-1.5 flex-wrap">
                 <button
                   type="button"
-                  onClick={() => setPdfViewMode('continuous')}
+                  onClick={() => {
+                    setPdfViewMode('continuous');
+                  }}
                   className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
-                    pdfViewMode === 'continuous'
+                    pdfViewMode === 'continuous' && !isPdfEditorMode
                       ? 'bg-blue-600 text-white shadow-xs'
                       : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200'
                   }`}
@@ -832,7 +1200,10 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setPdfViewMode('embed')}
+                  onClick={() => {
+                    setIsPdfEditorMode(false);
+                    setPdfViewMode('embed');
+                  }}
                   className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
                     pdfViewMode === 'embed'
                       ? 'bg-blue-600 text-white shadow-xs'
@@ -842,12 +1213,42 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
                 >
                   Native Viewer
                 </button>
+
+                {/* PDF Interactive Editor & E-Sign Placement Button */}
+                {version?.id && !isUnsavedDraft && (
+                  <button
+                    type="button"
+                    onClick={handleToggleEditorMode}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] font-bold transition-all ${
+                      isPdfEditorMode
+                        ? 'bg-indigo-600 text-white shadow-sm ring-2 ring-indigo-400'
+                        : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                    }`}
+                    title="Interactive PDF Editor: Drag and position signature stamps and text annotations on any page"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>{isPdfEditorMode ? 'Exit Editor' : 'Edit & Place E-Sign'}</span>
+                  </button>
+                )}
               </div>
             )}
           </div>
 
           {/* Action Buttons: Download, Print, Fullscreen */}
           <div className="flex items-center gap-2">
+            {/* Download Signed PDF if electronically signed */}
+            {validSignatures.length > 0 && (
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-colors"
+                title="Download verified signed document with physical signature stamps"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-white" />
+                <span>Download Signed PDF</span>
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleDownload}
@@ -877,6 +1278,177 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
               {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
             </button>
           </div>
+        </div>
+      )}
+
+      {/* Interactive PDF Editor Control Bar (Active when isPdfEditorMode is true) */}
+      {isPdf && isPdfEditorMode && (
+        <div className="mb-3 p-3.5 bg-gradient-to-r from-slate-900 via-indigo-950 to-slate-900 text-white rounded-xl shadow-md border border-indigo-700/60 flex flex-wrap items-center justify-between gap-3 text-xs animate-in fade-in duration-150">
+          {/* Tool Palette */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-[11px] font-bold text-indigo-300 uppercase tracking-wider mr-1">
+              Editor Tools:
+            </span>
+
+            <button
+              type="button"
+              onClick={() => setActiveEditorTool('pointer')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
+                activeEditorTool === 'pointer'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+              title="Pointer / Selection tool"
+            >
+              <MousePointer className="w-3.5 h-3.5" />
+              <span>Select</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => {
+                setActiveEditorTool('signature');
+                if (!signaturePlacement && pdfPageNumbers.length > 0) {
+                  const targetPage = pdfPageNumbers[pdfPageNumbers.length - 1] || 1;
+                  setSignaturePlacement({
+                    pageNumber: targetPage,
+                    x: 0.52,
+                    y: 0.78,
+                    width: 0.44,
+                    height: 0.14,
+                  });
+                }
+              }}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-bold transition-colors ${
+                activeEditorTool === 'signature'
+                  ? 'bg-blue-600 text-white shadow-xs ring-1 ring-blue-300'
+                  : 'bg-slate-800 text-blue-300 hover:bg-slate-700'
+              }`}
+              title="Position electronic signature stamp on any page"
+            >
+              <PenTool className="w-3.5 h-3.5" />
+              <span>Place Signature Stamp</span>
+              {signaturePlacement && (
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveEditorTool('text')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
+                activeEditorTool === 'text'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+              title="Click on document to add a text annotation"
+            >
+              <Type className="w-3.5 h-3.5" />
+              <span>Add Text Note</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveEditorTool('date')}
+              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
+                activeEditorTool === 'date'
+                  ? 'bg-indigo-600 text-white shadow-xs'
+                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+              }`}
+              title="Click on document to stamp current date"
+            >
+              <Calendar className="w-3.5 h-3.5" />
+              <span>Stamp Date</span>
+            </button>
+          </div>
+
+          {/* Status & Placement Summary */}
+          <div className="flex items-center gap-2 text-indigo-200 text-[11px] font-mono flex-wrap">
+            {signaturePlacement ? (
+              <span className="bg-blue-950/80 px-2.5 py-1 rounded border border-blue-600/50 flex items-center gap-1 text-blue-200">
+                <Check className="w-3 h-3 text-emerald-400" />
+                <span>Sig: Page {signaturePlacement.pageNumber} ({Math.round(signaturePlacement.x * 100)}%, {Math.round(signaturePlacement.y * 100)}%)</span>
+              </span>
+            ) : (
+              <span className="text-slate-400 italic font-sans text-xs">
+                No signature placed yet (click tool to place)
+              </span>
+            )}
+
+            {annotations.length > 0 && (
+              <span className="bg-amber-950/80 px-2 py-1 rounded border border-amber-600/50 text-amber-200">
+                {annotations.length} note{annotations.length > 1 ? 's' : ''}
+              </span>
+            )}
+          </div>
+
+          {/* Action Triggers */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Clear Placement */}
+            {(signaturePlacement || annotations.length > 0) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSignaturePlacement(null);
+                  setAnnotations([]);
+                }}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold transition-colors"
+                title="Clear placed signature and annotations"
+              >
+                Clear
+              </button>
+            )}
+
+            {/* Save Draft Annotations */}
+            {annotations.length > 0 && (
+              <button
+                type="button"
+                disabled={isSavingDraftAnnotations}
+                onClick={handleSaveDraftAnnotations}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-700 border border-slate-600 text-white rounded-lg text-xs font-bold transition-colors disabled:opacity-50"
+                title="Save text/date annotations to draft PDF"
+              >
+                {isSavingDraftAnnotations ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                ) : draftAnnotationsSuccess ? (
+                  <CheckCheck className="w-3.5 h-3.5 text-emerald-400" />
+                ) : (
+                  <Save className="w-3.5 h-3.5 text-indigo-400" />
+                )}
+                <span>{draftAnnotationsSuccess ? 'Notes Saved!' : 'Save Draft Notes'}</span>
+              </button>
+            )}
+
+            {/* Execute & Embed Electronic Signature Button */}
+            <button
+              type="button"
+              onClick={() => {
+                // If signature not yet placed, place it on the active/last page
+                if (!signaturePlacement && pdfPageNumbers.length > 0) {
+                  const targetPage = pdfPageNumbers[pdfPageNumbers.length - 1] || 1;
+                  setSignaturePlacement({
+                    pageNumber: targetPage,
+                    x: 0.52,
+                    y: 0.78,
+                    width: 0.44,
+                    height: 0.14,
+                  });
+                }
+                setIsSignModalOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 text-white rounded-lg text-xs font-bold shadow-md transition-all ring-1 ring-emerald-400"
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>Save & Embed Signature</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {draftAnnotationsError && (
+        <div className="mb-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+          <span>{draftAnnotationsError}</span>
         </div>
       )}
 
@@ -995,6 +1567,23 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
                 pdfDoc={pdfDoc}
                 pageNum={pageNum}
                 zoomLevel={zoomLevel}
+                isEditorMode={isPdfEditorMode}
+                activeTool={activeEditorTool}
+                signaturePlacement={signaturePlacement}
+                onUpdateSignaturePlacement={setSignaturePlacement}
+                annotations={annotations}
+                onAddAnnotation={(ann) => setAnnotations((prev) => [...prev, ann])}
+                onUpdateAnnotation={(id, updates) =>
+                  setAnnotations((prev) =>
+                    prev.map((a) => (a.id === id ? { ...a, ...updates } : a))
+                  )
+                }
+                onRemoveAnnotation={(id) =>
+                  setAnnotations((prev) => prev.filter((a) => a.id !== id))
+                }
+                signerName={user?.fullName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim()}
+                signerRole={user?.role}
+                signerDept={user?.department?.name || 'Department'}
               />
             ))}
           </div>
@@ -1234,7 +1823,12 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
           onClose={() => setIsSignModalOpen(false)}
           version={version}
           sopNumber={sopNumber}
+          placement={signaturePlacement}
+          annotations={annotations}
           onSignatureComplete={async (sig: SOPElectronicSignature) => {
+            setSignaturePlacement(null);
+            setAnnotations([]);
+            setIsPdfEditorMode(false);
             if (onSignatureAdded) {
               onSignatureAdded(sig);
             }
