@@ -133,6 +133,18 @@ def main():
         run_ssh_cmd(client, "docker ps --filter name=nkb_sop_app")
         run_ssh_cmd(client, "curl -s http://127.0.0.1:4050/api/health")
 
+        print("\n--- STEP: VERIFYING ASSETS IN CONTAINER ---\n", flush=True)
+        print("Checking for legacy 'Procedure Content' in container assets (should be 0):", flush=True)
+        run_ssh_cmd(client, "docker exec nkb_sop_app grep -rn 'Procedure Content (Version 1.0)' /app/client/dist || echo 'CONFIRMED: ZERO MATCHES FOUND'")
+        run_ssh_cmd(client, "docker exec nkb_sop_app grep -rn 'Procedure Content' /app/client/dist || echo 'CONFIRMED: ZERO MATCHES FOUND'")
+
+        print("\nChecking for SOPDocumentViewer in container assets (should exist):", flush=True)
+        run_ssh_cmd(client, "docker exec nkb_sop_app grep -rn 'SOPDocumentViewer' /app/client/dist | head -n 5")
+
+        print("\nChecking database data integrity in container:", flush=True)
+        run_ssh_cmd(client, "docker exec nkb_sop_app sqlite3 /app/data/sop_prod.db 'SELECT count(*) as total_sops FROM sops;'")
+        run_ssh_cmd(client, "docker exec nkb_sop_app ls -la /app/uploads")
+
         print("\n--- STEP: FINAL VERIFICATION ---\n", flush=True)
         print("1. Verifying SOP Application:\n", flush=True)
         run_ssh_cmd(client, "curl -I https://sop.nkbmanufacturing.com")
@@ -145,7 +157,7 @@ def main():
         print("\n3. All running containers:\n", flush=True)
         run_ssh_cmd(client, "docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'")
 
-        log("DEPLOYMENT COMPLETED SUCCESSFULLY!")
+        log("DEPLOYMENT AND AUDIT COMPLETED SUCCESSFULLY!")
 
     finally:
         client.close()
