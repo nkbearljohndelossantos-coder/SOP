@@ -25,6 +25,7 @@ import {
   CurrentFormValues,
   ExtractedSOPFields,
 } from '../components/SOPImportPreviewModal';
+import { SOPDocumentViewer } from '../components/SOPDocumentViewer';
 import {
   FileText,
   Users,
@@ -976,7 +977,14 @@ export const SOPDetailPage: React.FC = () => {
       {/* Navigation Tabs */}
       <div className="flex border-b border-slate-200 overflow-x-auto gap-2 bg-white px-4 rounded-xl border shadow-sm">
         {[
-          { id: 'content', label: 'Procedure Content', icon: FileText },
+          {
+            id: 'content',
+            label: 'Document Preview & Signatures',
+            icon: FileCheck,
+            badge: activeVersion.signatures?.filter((s) => s.status === 'VALID').length
+              ? `${activeVersion.signatures.filter((s) => s.status === 'VALID').length} Signed`
+              : undefined,
+          },
           {
             id: 'matrix',
             label: 'Participation & Approval Matrix',
@@ -1031,98 +1039,15 @@ export const SOPDetailPage: React.FC = () => {
         })}
       </div>
 
-      {/* Tab 1: Content View */}
+      {/* Tab 1: Uploaded Document Preview & Electronic Signatures */}
       {activeTab === 'content' && (
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-8">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-100 flex-wrap gap-2">
-            <div>
-              <h2 className="text-base font-bold text-slate-900">Controlled Procedure Specification</h2>
-              <p className="text-xs text-slate-500">Document No: {sop.sopNumber} • Version {activeVersion.versionNumber}</p>
-            </div>
-            <div className="flex items-center gap-2">
-              {canEditDraft && (
-                <button
-                  onClick={openEditDraftModal}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition-colors shadow-sm"
-                  title="Edit draft procedure content and sections"
-                >
-                  <Edit3 className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Edit Draft</span>
-                </button>
-              )}
-              <a
-                href={`/sops/${sop.id}/print`}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-lg text-xs font-semibold transition-colors"
-              >
-                <Printer className="w-3.5 h-3.5 text-slate-600" />
-                <span>Print Procedure</span>
-              </a>
-            </div>
-          </div>
-
-          <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              1. Purpose
-            </h3>
-            <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-line bg-slate-50/50 p-4 rounded-lg border border-slate-100">
-              {activeVersion.purpose}
-            </p>
-          </section>
-
-          <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              2. Scope
-            </h3>
-            <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-line bg-slate-50/50 p-4 rounded-lg border border-slate-100">
-              {activeVersion.scope}
-            </p>
-          </section>
-
-          <section>
-            <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-              3. Responsibilities
-            </h3>
-            <p className="text-sm text-slate-800 leading-relaxed whitespace-pre-line bg-slate-50/50 p-4 rounded-lg border border-slate-100">
-              {activeVersion.responsibilities}
-            </p>
-          </section>
-
-          <section>
-            <div className="flex items-center justify-between mb-2">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500">
-                4. Step-by-Step Procedure
-              </h3>
-              <span className="text-[11px] font-semibold text-slate-400">
-                Official Operational Instructions
-              </span>
-            </div>
-            <div className="text-sm text-slate-900 font-mono leading-relaxed whitespace-pre-line bg-slate-50 p-5 rounded-xl border border-slate-200 shadow-sm overflow-x-auto selection:bg-blue-100">
-              {activeVersion.procedure}
-            </div>
-          </section>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-                5. Related Forms & Records
-              </h3>
-              <p className="text-sm text-slate-700 bg-slate-50/50 p-4 rounded-lg border border-slate-100 whitespace-pre-line">
-                {activeVersion.relatedForms || 'None recorded.'}
-              </p>
-            </section>
-
-            <section>
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-2">
-                6. References & Applicable Standards
-              </h3>
-              <p className="text-sm text-slate-700 bg-slate-50/50 p-4 rounded-lg border border-slate-100 whitespace-pre-line">
-                {activeVersion.references || 'None recorded.'}
-              </p>
-            </section>
-          </div>
-        </div>
+        <SOPDocumentViewer
+          version={activeVersion}
+          sopNumber={sop.sopNumber}
+          sopTitle={sop.title}
+          canEdit={canEditDraft}
+          onRefresh={fetchSOP}
+        />
       )}
 
       {/* Tab 2: Participant & Approval Matrix */}
@@ -1987,68 +1912,14 @@ export const SOPDetailPage: React.FC = () => {
           </div>
 
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">1. Purpose *</label>
-            <textarea
-              required
-              rows={3}
-              value={draftForm.purpose}
-              onChange={(e) => setDraftForm({ ...draftForm, purpose: e.target.value })}
+            <label className="block font-semibold text-slate-700 mb-1">Revision Reason / History Note</label>
+            <input
+              type="text"
+              placeholder="e.g. Updated document attachment & procedural notes"
+              value={draftForm.revisionReason}
+              onChange={(e) => setDraftForm({ ...draftForm, revisionReason: e.target.value })}
               className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
             />
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">2. Scope *</label>
-            <textarea
-              required
-              rows={3}
-              value={draftForm.scope}
-              onChange={(e) => setDraftForm({ ...draftForm, scope: e.target.value })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">3. Responsibilities *</label>
-            <textarea
-              required
-              rows={3}
-              value={draftForm.responsibilities}
-              onChange={(e) => setDraftForm({ ...draftForm, responsibilities: e.target.value })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-            />
-          </div>
-
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">4. Step-by-Step Procedure *</label>
-            <textarea
-              required
-              rows={8}
-              value={draftForm.procedure}
-              onChange={(e) => setDraftForm({ ...draftForm, procedure: e.target.value })}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg font-mono text-xs"
-            />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">5. Related Forms</label>
-              <textarea
-                rows={2}
-                value={draftForm.relatedForms}
-                onChange={(e) => setDraftForm({ ...draftForm, relatedForms: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-              />
-            </div>
-            <div>
-              <label className="block font-semibold text-slate-700 mb-1">6. References</label>
-              <textarea
-                rows={2}
-                value={draftForm.references}
-                onChange={(e) => setDraftForm({ ...draftForm, references: e.target.value })}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs"
-              />
-            </div>
           </div>
 
           <div className="flex justify-end gap-2 pt-2">

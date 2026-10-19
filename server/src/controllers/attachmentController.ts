@@ -1,3 +1,4 @@
+import crypto from 'crypto';
 import { Request, Response } from 'express';
 import fs from 'fs';
 import multer from 'multer';
@@ -5,6 +6,11 @@ import path from 'path';
 import { env } from '../config/env';
 import { prisma } from '../prisma/client';
 import { logAudit } from '../services/auditService';
+
+export function computeFileHash(filePath: string): string {
+  const buffer = fs.readFileSync(filePath);
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
 
 // Ensure upload directory exists
 const uploadDir = path.resolve(env.UPLOAD_DIR);
@@ -122,6 +128,8 @@ export async function uploadAttachment(req: Request, res: Response) {
     return res.status(400).json({ success: false, message: 'Cannot add attachments to finalized SOP.' });
   }
 
+  const fileHash = computeFileHash(req.file.path);
+
   const attachment = await prisma.sOPAttachment.create({
     data: {
       sopVersionId: versionId,
@@ -136,16 +144,31 @@ export async function uploadAttachment(req: Request, res: Response) {
     },
   });
 
+  // If this attachment is a primary procedure document, associate with version
+  const ext = path.extname(req.file.originalname).toLowerCase();
+  if (['.pdf', '.docx', '.png', '.jpg', '.jpeg', '.doc'].includes(ext)) {
+    await prisma.sOPVersion.update({
+      where: { id: versionId },
+      data: {
+        primaryAttachmentId: attachment.id,
+        documentHash: fileHash,
+      },
+    });
+  }
+
   await logAudit({
     userId: req.user?.id,
     action: 'ATTACHMENT_UPLOADED',
     entity: 'SOPAttachment',
     entityId: attachment.id,
-    newValue: { filename: attachment.originalFilename, size: attachment.fileSize },
+    newValue: { filename: attachment.originalFilename, size: attachment.fileSize, hash: fileHash },
     ipAddress: req.ip,
   });
 
-  return res.status(201).json({ success: true, data: attachment });
+  return res.status(201).json({
+    success: true,
+    data: { ...attachment, documentHash: fileHash },
+  });
 }
 
 export async function downloadAttachment(req: Request, res: Response) {
@@ -161,14 +184,41 @@ export async function downloadAttachment(req: Request, res: Response) {
     return res.status(404).json({ success: false, message: 'File not found on server storage.' });
   }
 
+  const isInline = req.query.inline === 'true';
+  const disposition = isInline ? 'inline' : 'attachment';
+
   res.setHeader('Content-Type', attachment.mimeType);
   res.setHeader(
     'Content-Disposition',
-    `attachment; filename="${encodeURIComponent(attachment.originalFilename)}"`
+    `${disposition}; filename="${encodeURIComponent(attachment.originalFilename)}"`
   );
 
   const stream = fs.createReadStream(filePath);
   return stream.pipe(res);
+}
+
+export async function getAttachmentInfo(req: Request, res: Response) {
+  const { id } = req.params;
+
+  const attachment = await prisma.sOPAttachment.findUnique({
+    where: { id },
+    include: { uploadedBy: { select: { id: true, fullName: true } } },
+  });
+  if (!attachment) {
+    return res.status(404).json({ success: false, message: 'Attachment not found.' });
+  }
+
+  const filePath = path.join(uploadDir, attachment.storedFilename);
+  const fileHash = fs.existsSync(filePath) ? computeFileHash(filePath) : null;
+
+  return res.json({
+    success: true,
+    data: {
+      ...attachment,
+      documentHash: fileHash,
+      existsOnDisk: fs.existsSync(filePath),
+    },
+  });
 }
 
 export async function deleteAttachment(req: Request, res: Response) {

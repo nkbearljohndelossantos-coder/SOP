@@ -22,10 +22,10 @@ const createSOPSchema = z.object({
   category: z.string().optional().default('Standard Operating Procedure'),
   ownerDeptId: z.string().optional(),
   departmentId: z.string().optional(),
-  purpose: z.string().min(10),
-  scope: z.string().min(10),
-  responsibilities: z.string().min(10),
-  procedure: z.string().min(10),
+  purpose: z.string().optional().default(''),
+  scope: z.string().optional().default(''),
+  responsibilities: z.string().optional().default(''),
+  procedure: z.string().optional().default(''),
   relatedForms: z.string().optional(),
   references: z.string().optional(),
   effectiveDate: z.string().optional().nullable(),
@@ -285,6 +285,13 @@ export async function getSOP(req: Request, res: Response) {
       attachments: {
         include: { uploadedBy: { select: { id: true, fullName: true } } },
         orderBy: { createdAt: 'desc' },
+      },
+      signatures: {
+        include: {
+          signerUser: { select: { id: true, fullName: true, position: true, email: true } },
+          revokedBy: { select: { id: true, fullName: true } },
+        },
+        orderBy: { signedAt: 'asc' },
       },
     },
   });

@@ -2,6 +2,7 @@ import { Router } from 'express';
 import {
   deleteAttachment,
   downloadAttachment,
+  getAttachmentInfo,
   uploadAttachment,
   uploadMiddleware,
   uploadMultipleAttachments,
@@ -17,6 +18,7 @@ router.use(authenticateToken);
 router.post('/versions/:versionId', uploadMiddleware.single('file'), asyncHandler(uploadAttachment));
 router.post('/versions/:versionId/batch', uploadMultipleMiddleware, asyncHandler(uploadMultipleAttachments));
 router.get('/:id/download', asyncHandler(downloadAttachment));
+router.get('/:id/info', asyncHandler(getAttachmentInfo));
 router.delete('/:id', asyncHandler(deleteAttachment));
 
 export default router;

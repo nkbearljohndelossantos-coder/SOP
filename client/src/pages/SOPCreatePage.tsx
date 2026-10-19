@@ -344,30 +344,6 @@ export const SOPCreatePage: React.FC = () => {
       return;
     }
 
-    const finalPurpose = purpose.trim();
-    const finalScope = scope.trim();
-    const finalResponsibilities = responsibilities.trim();
-    const finalProcedure = procedure.trim();
-
-    if (!finalPurpose || !finalScope || !finalResponsibilities || !finalProcedure) {
-      setError(
-        'Purpose, Scope, Responsibilities, and Procedure sections are required (minimum 10 characters each). Please review and complete any missing sections before saving.'
-      );
-      return;
-    }
-
-    if (
-      finalPurpose.length < 10 ||
-      finalScope.length < 10 ||
-      finalResponsibilities.length < 10 ||
-      finalProcedure.length < 10
-    ) {
-      setError(
-        'Purpose, Scope, Responsibilities, and Procedure must each contain at least 10 characters.'
-      );
-      return;
-    }
-
     // Build participants payload
     const participants = Object.entries(participantMatrix).map(([deptId, type]) => ({
       departmentId: deptId,
@@ -395,10 +371,10 @@ export const SOPCreatePage: React.FC = () => {
         departmentId,
         ownerDeptId: departmentId,
         category: 'Standard Operating Procedure',
-        purpose: finalPurpose,
-        scope: finalScope,
-        responsibilities: finalResponsibilities,
-        procedure: finalProcedure,
+        purpose: purpose.trim() || undefined,
+        scope: scope.trim() || undefined,
+        responsibilities: responsibilities.trim() || undefined,
+        procedure: procedure.trim() || undefined,
         relatedForms: relatedForms.trim() || undefined,
         references: references.trim() || undefined,
         effectiveDate: effectiveDate || null,
@@ -863,118 +839,46 @@ export const SOPCreatePage: React.FC = () => {
           </div>
         </div>
 
-        {/* Document Content Sections */}
-        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-5">
+        {/* Document Workflow & Electronic Signatures Integration */}
+        <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-6 space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
-            <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-blue-600" />
-              Procedure Content (Version 1.0)
-            </h2>
-            <span className="text-[11px] text-slate-400">
-              All fields remain editable before saving
+            <div>
+              <h2 className="text-base font-bold text-slate-800 flex items-center gap-2">
+                <FileText className="w-4 h-4 text-blue-600" />
+                Document Workflow & Electronic Signatures
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Your uploaded Word (<strong>.docx</strong>) or <strong>.pdf</strong> file serves as the official controlled SOP document.
+              </p>
+            </div>
+            <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200 flex items-center gap-1">
+              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+              <span>21 CFR Part 11 Ready</span>
             </span>
           </div>
 
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                1. Purpose *
-              </label>
-              {renderAutoFilledBadge('purpose')}
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-2">
+            <div className="font-semibold text-slate-800 flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-blue-600" />
+              <span>Full In-Browser Document Preview & Electronic Signing Enabled</span>
             </div>
+            <p className="leading-relaxed">
+              Upon creating this SOP draft, you and designated department approvers can view the document natively in-browser with zoom, print, and full-screen controls, and apply verified electronic signatures directly with cryptographic SHA-256 hash tracking.
+            </p>
+          </div>
+
+          {/* Optional Explanatory Notes / Abstract */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">
+              Explanatory Notes / Abstract (Optional)
+            </label>
             <textarea
-              required
               rows={3}
-              placeholder="Explain why this procedure exists and the organizational objective it fulfills..."
-              value={purpose}
-              onChange={(e) => setPurpose(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                2. Scope *
-              </label>
-              {renderAutoFilledBadge('scope')}
-            </div>
-            <textarea
-              required
-              rows={3}
-              placeholder="Define which facilities, departments, shifts, or operations this procedure applies to..."
-              value={scope}
-              onChange={(e) => setScope(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                3. Responsibilities *
-              </label>
-              {renderAutoFilledBadge('responsibilities')}
-            </div>
-            <textarea
-              required
-              rows={4}
-              placeholder="Enumerate the designated roles, heads, and staff responsible for executing and enforcing this procedure..."
-              value={responsibilities}
-              onChange={(e) => setResponsibilities(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                4. Step-by-Step Procedure *
-              </label>
-              {renderAutoFilledBadge('procedure')}
-            </div>
-            <textarea
-              required
-              rows={10}
-              placeholder="Detail each procedural step sequentially (Step 1, Step 2, Step 3...)"
+              placeholder="Optional overview or administrative summary for this procedure..."
               value={procedure}
               onChange={(e) => setProcedure(e.target.value)}
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm font-mono focus:ring-2 focus:ring-blue-500 focus:outline-none"
+              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 focus:outline-none"
             />
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                  5. Related Forms & Records
-                </label>
-                {renderAutoFilledBadge('relatedForms')}
-              </div>
-              <textarea
-                rows={3}
-                placeholder="e.g. Form QC-012, Receiving Inspection Log"
-                value={relatedForms}
-                onChange={(e) => setRelatedForms(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="block text-xs font-semibold text-slate-700 uppercase tracking-wider">
-                  6. References & Standards
-                </label>
-                {renderAutoFilledBadge('references')}
-              </div>
-              <textarea
-                rows={3}
-                placeholder="e.g. ISO 9001:2015 Clause 8.5.2, Company Safety Policy"
-                value={references}
-                onChange={(e) => setReferences(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:outline-none"
-              />
-            </div>
           </div>
         </div>
 

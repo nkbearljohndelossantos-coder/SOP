@@ -11,6 +11,11 @@ import {
   handleSubmitApproval,
   handleSubmitForReview,
 } from '../controllers/workflowController';
+import {
+  handleGetVersionSignatures,
+  handleRevokeSignature,
+  handleSignDocument,
+} from '../controllers/signatureController';
 import { authenticateToken } from '../middleware/auth';
 import { requireDepartmentAuthorization, requirePermission } from '../middleware/rbac';
 import { asyncHandler } from '../utils/asyncHandler';
@@ -118,6 +123,13 @@ const finalizeRoutes = ['/versions/:versionId/finalize', '/:versionId/finalize']
 finalizeRoutes.forEach((path) => {
   router.post(path, requirePermission(Permissions.SOP_FINALIZE), asyncHandler(handleFinalizeSOP));
 });
+
+// Electronic Signatures
+router.post('/versions/:versionId/sign', asyncHandler(handleSignDocument));
+router.post('/:versionId/sign', asyncHandler(handleSignDocument));
+router.get('/versions/:versionId/signatures', asyncHandler(handleGetVersionSignatures));
+router.get('/:versionId/signatures', asyncHandler(handleGetVersionSignatures));
+router.post('/signatures/:signatureId/revoke', asyncHandler(handleRevokeSignature));
 
 export default router;
 

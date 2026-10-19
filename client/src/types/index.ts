@@ -184,6 +184,33 @@ export interface SOPApproval {
   createdAt: string;
 }
 
+export interface SOPElectronicSignature {
+  id: string;
+  sopVersionId: string;
+  sopId: string;
+  attachmentId?: string | null;
+  signerUserId: string;
+  signerName: string;
+  signerEmail: string;
+  signerRole: string;
+  signerDepartment?: string | null;
+  departmentId?: string | null;
+  signatureMethod: 'DRAWN' | 'TYPED';
+  signatureData: string;
+  documentHash: string;
+  declarationText: string;
+  workflowStep: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  metadata?: string | null;
+  status: 'VALID' | 'REVOKED';
+  revokedAt?: string | null;
+  revokedById?: string | null;
+  revokedReason?: string | null;
+  signedAt: string;
+  createdAt: string;
+}
+
 export interface SOPVersion {
   id: string;
   sopId: string;
@@ -191,10 +218,10 @@ export interface SOPVersion {
   versionInt: number;
   status: SOPStatus;
   title: string;
-  purpose: string;
-  scope: string;
-  responsibilities: string;
-  procedure: string;
+  purpose?: string;
+  scope?: string;
+  responsibilities?: string;
+  procedure?: string;
   relatedForms?: string | null;
   references?: string | null;
   effectiveDate?: string | null;
@@ -217,6 +244,9 @@ export interface SOPVersion {
     email: string;
   } | null;
   lockVersion: number;
+  documentHash?: string | null;
+  signatureStatus?: string;
+  primaryAttachmentId?: string | null;
   createdAt: string;
   updatedAt: string;
   participants: SOPParticipant[];
@@ -224,6 +254,7 @@ export interface SOPVersion {
   remarks?: SOPRemark[];
   approvals?: SOPApproval[];
   attachments?: SOPAttachment[];
+  signatures?: SOPElectronicSignature[];
 }
 
 export interface SOP {

@@ -39,6 +39,8 @@ model User {
   notifications    Notification[]
   invitesCreated   RegistrationInvite[] @relation("InviteCreator")
   inviteUsed       RegistrationInvite?  @relation("InviteUser")
+  signaturesCreated SOPElectronicSignature[] @relation("SignerUser")
+  signaturesRevoked SOPElectronicSignature[] @relation("RevokerUser")
 
   @@map("users")
 }
@@ -122,16 +124,19 @@ model SOPVersion {
   versionInt      Int            @default(1)
   status          String         @default("DRAFT")
   title           String
-  purpose         String
-  scope           String
-  responsibilities String
-  procedure       String
+  purpose         String         @default("")
+  scope           String         @default("")
+  responsibilities String        @default("")
+  procedure       String         @default("")
   relatedForms    String?
   references      String?
   effectiveDate   DateTime?
   reviewDate      DateTime?
   revisionReason  String?
   changeSummary   String?
+  documentHash    String?
+  signatureStatus String         @default("PENDING_SIGNATURE")
+  primaryAttachmentId String?
   isFinalized     Boolean        @default(false)
   finalizedAt     DateTime?
   finalizedById   String?
@@ -149,6 +154,7 @@ model SOPVersion {
   remarks         SOPRemark[]
   approvals       SOPApproval[]
   attachments     SOPAttachment[]
+  signatures      SOPElectronicSignature[]
 
   @@unique([sopId, versionNumber])
   @@index([status])
@@ -325,5 +331,42 @@ model RegistrationInvite {
 
   @@index([token])
   @@map("registration_invites")
+}
+
+model SOPElectronicSignature {
+  id               String       @id @default(cuid())
+  sopVersionId     String
+  sopId            String
+  attachmentId     String?
+  signerUserId     String
+  signerName       String
+  signerEmail      String
+  signerRole       String
+  signerDepartment String?
+  departmentId     String?
+  signatureMethod  String       // DRAWN, TYPED
+  signatureData    String       // Base64 data URL
+  documentHash     String       // SHA-256 hash of document at signing time
+  declarationText  String       // Legal consent text
+  workflowStep     String?      // e.g. DEPARTMENT_APPROVAL, FINAL_APPROVAL, AUTHOR_SIGN_OFF
+  ipAddress        String?
+  userAgent        String?
+  metadata         String?      // JSON placement info { page, x, y }
+  status           String       @default("VALID") // VALID, REVOKED
+  revokedAt        DateTime?
+  revokedById      String?
+  revokedReason    String?
+  signedAt         DateTime     @default(now())
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  sopVersion       SOPVersion   @relation(fields: [sopVersionId], references: [id], onDelete: Cascade)
+  signerUser       User         @relation("SignerUser", fields: [signerUserId], references: [id])
+  revokedBy        User?        @relation("RevokerUser", fields: [revokedById], references: [id])
+
+  @@index([sopVersionId])
+  @@index([signerUserId])
+  @@index([status])
+  @@map("sop_electronic_signatures")
 }
 

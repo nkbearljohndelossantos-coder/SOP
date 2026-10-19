@@ -14,10 +14,10 @@ export interface CreateSOPInput {
   category: string;
   ownerDeptId: string;
   createdById: string;
-  purpose: string;
-  scope: string;
-  responsibilities: string;
-  procedure: string;
+  purpose?: string;
+  scope?: string;
+  responsibilities?: string;
+  procedure?: string;
   relatedForms?: string;
   references?: string;
   effectiveDate?: Date | null;
@@ -130,10 +130,10 @@ export async function createSOP(input: CreateSOPInput, ipAddress?: string) {
         versionInt: 1,
         status: SOPStatuses.DRAFT,
         title: input.title,
-        purpose: input.purpose,
-        scope: input.scope,
-        responsibilities: input.responsibilities,
-        procedure: input.procedure,
+        purpose: input.purpose || '',
+        scope: input.scope || '',
+        responsibilities: input.responsibilities || '',
+        procedure: input.procedure || '',
         relatedForms: input.relatedForms,
         references: input.references,
         effectiveDate: input.effectiveDate,
