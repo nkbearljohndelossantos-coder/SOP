@@ -25,7 +25,7 @@ export const Navbar: React.FC = () => {
   };
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40">
+    <header className="h-16 flex-shrink-0 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between sticky top-0 z-40">
       <div className="flex items-center space-x-3">
         <div className="flex items-center gap-2 font-bold text-lg text-nkb-navy">
           <div className="w-8 h-8 rounded-lg bg-nkb-navy text-white flex items-center justify-center font-black tracking-tighter text-sm shadow">
