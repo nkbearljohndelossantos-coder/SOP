@@ -550,11 +550,13 @@ export const SOPDetailPage: React.FC = () => {
             try {
               attachmentDocxRef.current.innerHTML = '';
               await renderAsync(await blob.arrayBuffer(), attachmentDocxRef.current, undefined, {
-                className: 'docx-preview',
-                inWrapper: true,
+                className: 'docx',
+                inWrapper: false,
                 ignoreWidth: false,
-                ignoreHeight: false,
+                ignoreHeight: true,
                 breakPages: true,
+                renderHeaders: true,
+                renderFooters: true,
               });
             } catch (err) {
               console.error('Failed to render docx attachment:', err);

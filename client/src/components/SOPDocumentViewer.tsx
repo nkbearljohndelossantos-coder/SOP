@@ -6,6 +6,8 @@ import { Modal } from './common/Modal';
 import api from '../services/api';
 import { renderAsync } from 'docx-preview';
 import { format } from 'date-fns';
+import * as pdfjsLib from 'pdfjs-dist';
+import pdfjsWorkerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
   FileText,
   Download,
@@ -31,7 +33,15 @@ import {
   Image as ImageIcon,
   Paperclip,
   X,
+  Scan,
+  Layout,
+  ExternalLink,
 } from 'lucide-react';
+
+// Configure PDF.js worker
+if (!pdfjsLib.GlobalWorkerOptions.workerSrc) {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl;
+}
 
 export interface StagedDocumentInfo {
   id: string;
@@ -62,6 +72,96 @@ export interface SOPDocumentViewerProps {
   onRemoveDocument?: () => void;
   isUnsavedDraft?: boolean;
 }
+
+/**
+ * Dedicated Multi-Page PDF Canvas Page Component
+ * Renders an individual page with high-DPI scaling and page headers
+ */
+const PdfPageItem: React.FC<{
+  pdfDoc: any;
+  pageNum: number;
+  zoomLevel: number;
+}> = ({ pdfDoc, pageNum, zoomLevel }) => {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const renderTaskRef = useRef<any>(null);
+  const [rendering, setRendering] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+
+    async function renderPage() {
+      if (!pdfDoc || !canvasRef.current) return;
+      try {
+        setRendering(true);
+        const page = await pdfDoc.getPage(pageNum);
+        if (!active) return;
+
+        // Base multiplier of 1.5 ensures crisp high-DPI text and table rendering
+        const dpr = window.devicePixelRatio || 1;
+        const scale = (zoomLevel / 100) * 1.5;
+        const viewport = page.getViewport({ scale });
+
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const context = canvas.getContext('2d');
+        if (!context) return;
+
+        canvas.width = Math.floor(viewport.width * dpr);
+        canvas.height = Math.floor(viewport.height * dpr);
+        canvas.style.width = `${Math.floor(viewport.width / 1.5)}px`;
+        canvas.style.height = `${Math.floor(viewport.height / 1.5)}px`;
+
+        context.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+        if (renderTaskRef.current) {
+          try {
+            renderTaskRef.current.cancel();
+          } catch {}
+        }
+
+        const renderContext = {
+          canvasContext: context,
+          viewport: viewport,
+        };
+        const task = page.render(renderContext);
+        renderTaskRef.current = task;
+        await task.promise;
+        if (active) setRendering(false);
+      } catch (err: any) {
+        if (err?.name !== 'RenderingCancelledException') {
+          console.error(`Error rendering PDF page ${pageNum}:`, err);
+        }
+      }
+    }
+
+    renderPage();
+
+    return () => {
+      active = false;
+      if (renderTaskRef.current) {
+        try {
+          renderTaskRef.current.cancel();
+        } catch {}
+      }
+    };
+  }, [pdfDoc, pageNum, zoomLevel]);
+
+  return (
+    <div className="pdf-page-card bg-white shadow-xl rounded-md mb-8 flex flex-col items-center border border-slate-300">
+      <div className="bg-slate-100/90 border-b border-slate-200 w-full px-4 py-1.5 flex justify-between items-center text-[11px] font-mono text-slate-500">
+        <span className="font-semibold text-slate-700">Page {pageNum}</span>
+        {rendering && (
+          <span className="flex items-center gap-1 text-blue-600 font-sans">
+            <Loader2 className="w-3 h-3 animate-spin" /> Rendering...
+          </span>
+        )}
+      </div>
+      <div className="p-3 sm:p-6 bg-white flex justify-center w-full overflow-x-auto">
+        <canvas ref={canvasRef} className="max-w-full h-auto block shadow-sm" />
+      </div>
+    </div>
+  );
+};
 
 export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
   version,
@@ -121,13 +221,22 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
   const [docError, setDocError] = useState<string | null>(null);
   const [copiedHash, setCopiedHash] = useState<boolean>(false);
 
-  // Object URLs for PDF and Images (cleaned up on unmount or change)
+  // PDF display mode: 'continuous' (high-DPI multi-page canvas scroll) or 'embed' (native iframe)
+  const [pdfViewMode, setPdfViewMode] = useState<'continuous' | 'embed'>('continuous');
+  const [pdfDoc, setPdfDoc] = useState<any>(null);
+  const [pdfPageNumbers, setPdfPageNumbers] = useState<number[]>([]);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+
+  // Image Object URL
   const [imageUrl, setImageUrl] = useState<string | null>(null);
 
-  // DOCX specific state
+  // DOCX specific state & refs
   const docxContainerRef = useRef<HTMLDivElement | null>(null);
   const [docxRendered, setDocxRendered] = useState<boolean>(false);
+
+  // Primary scroll canvas container ref
+  const scrollCanvasRef = useRef<HTMLDivElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
 
   // Signing modal
   const [isSignModalOpen, setIsSignModalOpen] = useState<boolean>(false);
@@ -144,15 +253,15 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
   const [internalUploading, setInternalUploading] = useState<boolean>(false);
   const [internalUploadError, setInternalUploadError] = useState<string | null>(null);
 
-  const containerRef = useRef<HTMLDivElement | null>(null);
-
-  // 1. PDF Object URL Resolution & Rendering
+  // 1. PDF Parsing & Loading (Supports both continuous page rendering & fallback embed)
   useEffect(() => {
     let active = true;
     let createdUrl: string | null = null;
 
-    async function preparePdf() {
+    async function loadPdfDocument() {
       if (!isPdf || !hasDocument) {
+        setPdfDoc(null);
+        setPdfPageNumbers([]);
         setPdfUrl(null);
         return;
       }
@@ -161,29 +270,43 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
       setDocError(null);
 
       try {
+        let arrayBuffer: ArrayBuffer;
+
         if (localFile) {
+          arrayBuffer = await localFile.arrayBuffer();
           createdUrl = URL.createObjectURL(localFile);
-          if (active) {
-            setPdfUrl(createdUrl);
-            setDocLoading(false);
+          if (active) setPdfUrl(createdUrl);
+        } else {
+          const downloadPath =
+            stagedDocument?.downloadUrl ||
+            (primaryAttachment ? `/attachments/${primaryAttachment.id}/download?inline=true` : null);
+          if (!downloadPath) {
+            throw new Error('No PDF source attachment available.');
           }
-          return;
+
+          const res = await api.get(downloadPath, { responseType: 'blob' });
+          if (!active) return;
+          createdUrl = URL.createObjectURL(res.data);
+          if (active) setPdfUrl(createdUrl);
+          arrayBuffer = await res.data.arrayBuffer();
         }
 
-        const downloadPath = stagedDocument?.downloadUrl || (primaryAttachment ? `/attachments/${primaryAttachment.id}/download?inline=true` : null);
-        if (!downloadPath) {
-          throw new Error('No PDF source attachment available.');
-        }
-
-        const res = await api.get(downloadPath, { responseType: 'blob' });
         if (!active) return;
 
-        createdUrl = URL.createObjectURL(res.data);
-        setPdfUrl(createdUrl);
+        // Parse with PDF.js for continuous multi-page rendering
+        const doc = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        if (!active) return;
+
+        setPdfDoc(doc);
+        const pages = Array.from({ length: doc.numPages }, (_, i) => i + 1);
+        setPdfPageNumbers(pages);
       } catch (err: any) {
         if (!active) return;
-        console.error('Failed to prepare PDF preview:', err);
-        setDocError(err.response?.data?.message || 'Failed to load PDF preview. Please check network connection or retry.');
+        console.error('Failed to load PDF preview:', err);
+        setDocError(
+          err.response?.data?.message ||
+            'Failed to parse PDF document. The file can still be opened in native embed mode or downloaded.'
+        );
       } finally {
         if (active) {
           setDocLoading(false);
@@ -191,7 +314,7 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
       }
     }
 
-    preparePdf();
+    loadPdfDocument();
 
     return () => {
       active = false;
@@ -201,7 +324,7 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
     };
   }, [isPdf, hasDocument, localFile, stagedDocument?.id, stagedDocument?.downloadUrl, primaryAttachment?.id]);
 
-  // 2. DOCX Rendering via docx-preview
+  // 2. High-Fidelity DOCX Rendering via docx-preview
   const renderDocxDocument = useCallback(async () => {
     if (!isDocx || !hasDocument) return;
 
@@ -215,7 +338,9 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
       if (localFile) {
         arrayBuffer = await localFile.arrayBuffer();
       } else {
-        const downloadPath = stagedDocument?.downloadUrl || (primaryAttachment ? `/attachments/${primaryAttachment.id}/download` : null);
+        const downloadPath =
+          stagedDocument?.downloadUrl ||
+          (primaryAttachment ? `/attachments/${primaryAttachment.id}/download` : null);
         if (!downloadPath) throw new Error('No DOCX source attachment available.');
 
         const res = await api.get(downloadPath, { responseType: 'arraybuffer' });
@@ -223,24 +348,31 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
       }
 
       if (!docxContainerRef.current) {
-        // Wait briefly if DOM ref is mounting
         await new Promise((r) => setTimeout(r, 100));
       }
 
       if (docxContainerRef.current) {
         docxContainerRef.current.innerHTML = '';
+        // inWrapper: false attaches section.docx directly to docxContainerRef
+        // ignoreHeight: true allows pages to naturally grow and avoids content/table clipping
         await renderAsync(arrayBuffer, docxContainerRef.current, undefined, {
-          className: 'docx-preview',
-          inWrapper: true,
+          className: 'docx',
+          inWrapper: false,
           ignoreWidth: false,
-          ignoreHeight: false,
+          ignoreHeight: true,
           breakPages: true,
+          renderHeaders: true,
+          renderFooters: true,
+          renderFootnotes: true,
+          renderEndnotes: true,
         });
         setDocxRendered(true);
       }
     } catch (err: any) {
       console.error('Failed to render DOCX preview:', err);
-      setDocError('Unable to render Word layout in browser. The document can still be downloaded and viewed in Microsoft Word.');
+      setDocError(
+        'Unable to render Word layout in browser. The document can still be downloaded and viewed in Microsoft Word.'
+      );
     } finally {
       setDocLoading(false);
     }
@@ -276,7 +408,9 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
           return;
         }
 
-        const downloadPath = stagedDocument?.downloadUrl || (primaryAttachment ? `/attachments/${primaryAttachment.id}/download?inline=true` : null);
+        const downloadPath =
+          stagedDocument?.downloadUrl ||
+          (primaryAttachment ? `/attachments/${primaryAttachment.id}/download?inline=true` : null);
         if (!downloadPath) throw new Error('No image attachment source available.');
 
         const res = await api.get(downloadPath, { responseType: 'blob' });
@@ -351,16 +485,41 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
       const a = document.createElement('a');
       a.href = url;
       a.download = localFile.name;
+      document.body.appendChild(a);
       a.click();
+      document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } else if (stagedDocument?.downloadUrl) {
       window.open(stagedDocument.downloadUrl, '_blank');
-    } else if (primaryAttachment?.id) {
+    } else if (primaryAttachment) {
       window.open(`/api/attachments/${primaryAttachment.id}/download`, '_blank');
     }
   };
 
-  // Drag and Drop handlers for file selection
+  const handleFitToWidth = () => {
+    if (!scrollCanvasRef.current) {
+      setZoomLevel(100);
+      return;
+    }
+    const canvasWidth = scrollCanvasRef.current.clientWidth - 64; // subtract padding
+    if (canvasWidth <= 0) {
+      setZoomLevel(100);
+      return;
+    }
+    // Standard Letter / A4 width is ~816px
+    const targetScale = Math.min(180, Math.max(60, Math.round((canvasWidth / 816) * 100)));
+    setZoomLevel(targetScale);
+  };
+
+  const formatFileSize = (bytes: number): string => {
+    if (!bytes || bytes === 0) return '0 B';
+    const k = 1024;
+    const sizes = ['B', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  };
+
+  // Drag and drop handlers
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
@@ -383,28 +542,28 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
   };
 
   const handleFilesSelected = async (file: File) => {
+    setInternalUploadError(null);
     if (onFileSelect) {
       onFileSelect(file);
       return;
     }
 
-    // Fallback if rendered on SOPDetailPage without onFileSelect
     if (version?.id) {
       try {
         setInternalUploading(true);
-        setInternalUploadError(null);
         const formData = new FormData();
         formData.append('file', file);
-
         await api.post(`/attachments/versions/${version.id}`, formData, {
           headers: { 'Content-Type': 'multipart/form-data' },
         });
-
         if (onRefresh) {
           await onRefresh();
         }
       } catch (err: any) {
-        setInternalUploadError(err.response?.data?.message || 'Failed to upload document file.');
+        console.error('Failed to attach document:', err);
+        setInternalUploadError(
+          err.response?.data?.message || 'Failed to upload attachment. Please try again.'
+        );
       } finally {
         setInternalUploading(false);
       }
@@ -413,38 +572,34 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
 
   const handleRevokeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!revokingSignature) return;
+    if (!revokingSignature || !revokeReason.trim()) return;
 
     try {
       setSubmittingRevoke(true);
       setRevokeError(null);
-
-      await api.post(`/workflow/signatures/${revokingSignature.id}/revoke`, {
-        reason: revokeReason,
+      await api.post(`/signatures/${revokingSignature.id}/revoke`, {
+        reason: revokeReason.trim(),
       });
-
       setRevokingSignature(null);
       setRevokeReason('');
       if (onRefresh) {
         await onRefresh();
       }
     } catch (err: any) {
-      setRevokeError(err.response?.data?.message || 'Failed to revoke electronic signature.');
+      console.error('Failed to revoke signature:', err);
+      setRevokeError(
+        err.response?.data?.message || 'Failed to revoke electronic signature. Action rejected.'
+      );
     } finally {
       setSubmittingRevoke(false);
     }
   };
 
-  const formatFileSize = (bytes?: number) => {
-    if (!bytes || bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
-  };
-
-  const signatures = version?.signatures || [];
-  const validSignatures = signatures.filter((s) => s.status === 'VALID');
+  // Signatures
+  const validSignatures =
+    version?.signatures?.filter((sig) => sig.status === 'VALID') || [];
+  const revokedSignatures =
+    version?.signatures?.filter((sig) => sig.status === 'REVOKED') || [];
 
   const isUploading = uploadStatus === 'uploading' || internalUploading;
   const currentUploadError = uploadErrorMessage || internalUploadError;
@@ -453,7 +608,7 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
     <div
       ref={containerRef}
       className={`bg-white rounded-xl border border-slate-200 shadow-sm flex flex-col transition-all ${
-        isFullscreen ? 'fixed inset-0 z-50 rounded-none border-none p-4 bg-slate-900' : 'p-6'
+        isFullscreen ? 'fixed inset-0 z-50 rounded-none border-none p-4 bg-slate-900 overflow-hidden' : 'p-6'
       }`}
     >
       {/* Top Header Bar: Document Title, Metadata & Cryptographic Hash */}
@@ -496,7 +651,7 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
               </span>
             )}
 
-            {/* Upload Status Indicators (Section 5) */}
+            {/* Upload Status Indicators */}
             {isUploading && (
               <span className="inline-flex items-center gap-1.5 text-[11px] font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded-full border border-blue-300 animate-pulse">
                 <Loader2 className="w-3 h-3 animate-spin text-blue-600" />
@@ -526,6 +681,14 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
               </span>
               <span>•</span>
               <span>{formatFileSize(fileSize)}</span>
+              {isPdf && pdfPageNumbers.length > 0 && (
+                <>
+                  <span>•</span>
+                  <span className="font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                    {pdfPageNumbers.length} {pdfPageNumbers.length === 1 ? 'Page' : 'Pages'} Total
+                  </span>
+                </>
+              )}
               {primaryAttachment?.createdAt && (
                 <>
                   <span>•</span>
@@ -584,7 +747,7 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
         </div>
       </div>
 
-      {/* Upload Error Banner & Retry Button (Section 5) */}
+      {/* Upload Error Banner & Retry Button */}
       {currentUploadError && (
         <div className="my-3 p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
@@ -604,58 +767,101 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
         </div>
       )}
 
-      {/* Viewport Toolbar Controls (Zoom, Reset, Print, Download, Fullscreen) */}
+      {/* Viewport Toolbar Controls (Zoom, Reset, Fit Width, Print, Download, Fullscreen) */}
       {hasDocument && (
         <div
-          className={`py-2 px-3 my-3 rounded-lg border flex flex-wrap items-center justify-between gap-2 text-xs ${
+          className={`py-2 px-3 my-3 rounded-lg border flex flex-wrap items-center justify-between gap-2 text-xs shadow-sm ${
             isFullscreen
               ? 'bg-slate-800 border-slate-700 text-slate-200'
               : 'bg-slate-50 border-slate-200 text-slate-700'
           }`}
         >
-          <div className="flex items-center gap-1">
+          {/* Zoom & Fit-to-Width Controls */}
+          <div className="flex items-center gap-1.5">
             <button
               type="button"
               onClick={() => setZoomLevel((z) => Math.max(50, z - 10))}
               className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-              title="Zoom Out"
+              title="Zoom Out (-10%)"
             >
               <ZoomOut className="w-4 h-4" />
             </button>
-            <span className="font-mono text-[11px] px-2 font-semibold">{zoomLevel}%</span>
+            <span className="font-mono text-xs px-2 font-bold min-w-[50px] text-center">
+              {zoomLevel}%
+            </span>
             <button
               type="button"
               onClick={() => setZoomLevel((z) => Math.min(200, z + 10))}
               className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-              title="Zoom In"
+              title="Zoom In (+10%)"
             >
               <ZoomIn className="w-4 h-4" />
             </button>
             <button
               type="button"
+              onClick={handleFitToWidth}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors font-medium text-[11px]"
+              title="Fit to Container Width"
+            >
+              <Scan className="w-3.5 h-3.5 text-blue-600" />
+              <span>Fit Width</span>
+            </button>
+            <button
+              type="button"
               onClick={() => setZoomLevel(100)}
               className="p-1.5 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
-              title="Reset to 100%"
+              title="Reset Zoom to 100%"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
+
+            {/* PDF View Mode Toggle (Continuous Page Reader vs Native Browser Embed) */}
+            {isPdf && pdfUrl && (
+              <div className="ml-3 pl-3 border-l border-slate-300 dark:border-slate-600 flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setPdfViewMode('continuous')}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                    pdfViewMode === 'continuous'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200'
+                  }`}
+                  title="Scroll smoothly through all pages continuously"
+                >
+                  Page Reader
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPdfViewMode('embed')}
+                  className={`px-2 py-1 rounded text-[11px] font-semibold transition-colors ${
+                    pdfViewMode === 'embed'
+                      ? 'bg-blue-600 text-white shadow-xs'
+                      : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-200'
+                  }`}
+                  title="Switch to Browser Native PDF Plugin Viewer"
+                >
+                  Native Viewer
+                </button>
+              </div>
+            )}
           </div>
 
+          {/* Action Buttons: Download, Print, Fullscreen */}
           <div className="flex items-center gap-2">
             <button
               type="button"
               onClick={handleDownload}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 font-semibold text-[11px] shadow-sm transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 font-semibold text-xs shadow-xs transition-colors"
               title="Download original file"
             >
               <Download className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-              <span>Download</span>
+              <span>Download Original</span>
             </button>
 
             <button
               type="button"
               onClick={handlePrint}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 font-semibold text-[11px] shadow-sm transition-colors"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-white dark:bg-slate-700 border border-slate-300 dark:border-slate-600 hover:bg-slate-100 font-semibold text-xs shadow-xs transition-colors"
               title="Print Document"
             >
               <Printer className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
@@ -674,167 +880,202 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
         </div>
       )}
 
-      {/* Main Document Viewer Canvas */}
+      {/* Main Document Viewer Canvas: Single Primary Scrollable Area */}
       <div
-        className={`relative flex-1 min-h-[500px] border rounded-xl overflow-auto bg-slate-100 flex items-center justify-center p-4 ${
-          isFullscreen ? 'h-[calc(100vh-280px)] border-slate-700' : 'h-[650px] border-slate-200'
+        ref={scrollCanvasRef}
+        className={`relative border rounded-xl bg-slate-200/90 dark:bg-slate-900 transition-all ${
+          isFullscreen
+            ? 'h-[calc(100vh-140px)] overflow-y-auto p-4 sm:p-8'
+            : 'min-h-[750px] max-h-[85vh] overflow-y-auto p-4 sm:p-8 border-slate-300'
         }`}
       >
         {/* State 1: No document selected */}
         {!hasDocument ? (
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            className={`text-center p-8 max-w-md w-full border-2 border-dashed rounded-2xl transition-all cursor-pointer ${
-              isDragging
-                ? 'border-blue-500 bg-blue-50/70 scale-[0.99]'
-                : 'border-slate-300 bg-white hover:border-blue-400 hover:bg-slate-50'
-            }`}
-            onClick={() => internalFileInputRef.current?.click()}
-          >
-            <div className="p-4 bg-blue-50 text-blue-600 rounded-full w-16 h-16 mx-auto flex items-center justify-center shadow-inner mb-3">
-              <UploadCloud className="w-8 h-8" />
-            </div>
-            <h3 className="text-sm font-bold text-slate-800">No Document Selected</h3>
-            <p className="text-xs text-slate-500 mt-1 mb-4 leading-relaxed">
-              Upload your official procedure document (<strong>.pdf</strong>, <strong>.docx</strong>, or images).
-              The preview will immediately appear below with zoom and pagination controls.
-            </p>
-
-            <input
-              ref={internalFileInputRef}
-              type="file"
-              accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.webp"
-              onChange={(e) => {
-                if (e.target.files && e.target.files.length > 0) {
-                  handleFilesSelected(e.target.files[0]);
-                  e.target.value = '';
-                }
-              }}
-              className="hidden"
-            />
-
-            <button
-              type="button"
-              disabled={isUploading}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors disabled:opacity-50"
+          <div className="min-h-[500px] flex items-center justify-center p-4">
+            <div
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+              className={`text-center p-8 max-w-md w-full border-2 border-dashed rounded-2xl transition-all cursor-pointer ${
+                isDragging
+                  ? 'border-blue-500 bg-blue-50/70 scale-[0.99]'
+                  : 'border-slate-300 bg-white hover:border-blue-400 hover:bg-slate-50 shadow-sm'
+              }`}
+              onClick={() => internalFileInputRef.current?.click()}
             >
-              <UploadCloud className="w-4 h-4" />
-              <span>Select Procedure Document (.pdf / .docx)</span>
-            </button>
+              <div className="p-4 bg-blue-50 text-blue-600 rounded-full w-16 h-16 mx-auto flex items-center justify-center shadow-inner mb-3">
+                <UploadCloud className="w-8 h-8" />
+              </div>
+              <h3 className="text-sm font-bold text-slate-800">No Document Selected</h3>
+              <p className="text-xs text-slate-500 mt-1 mb-4 leading-relaxed">
+                Upload your official procedure document (<strong>.pdf</strong>, <strong>.docx</strong>, or images).
+                The document preview will render automatically below with complete vertical page scrolling and zoom controls.
+              </p>
+
+              <input
+                ref={internalFileInputRef}
+                type="file"
+                accept=".pdf,.docx,.doc,.png,.jpg,.jpeg,.webp"
+                onChange={(e) => {
+                  if (e.target.files && e.target.files.length > 0) {
+                    handleFilesSelected(e.target.files[0]);
+                    e.target.value = '';
+                  }
+                }}
+                className="hidden"
+              />
+
+              <button
+                type="button"
+                disabled={isUploading}
+                className="inline-flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-sm transition-colors disabled:opacity-50"
+              >
+                <UploadCloud className="w-4 h-4" />
+                <span>Select Procedure Document (.pdf / .docx)</span>
+              </button>
+            </div>
           </div>
         ) : docLoading ? (
           /* State 5: Preview Loading */
-          <div className="flex flex-col items-center justify-center p-8 text-slate-500">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-600 mb-2" />
-            <span className="text-xs font-semibold">
-              Preparing {isPdf ? 'PDF' : isDocx ? 'Word (.docx)' : 'Document'} Preview...
+          <div className="min-h-[500px] flex flex-col items-center justify-center p-8 text-slate-600">
+            <Loader2 className="w-10 h-10 animate-spin text-blue-600 mb-3" />
+            <span className="text-sm font-bold text-slate-800">
+              Rendering Complete {isPdf ? 'PDF' : isDocx ? 'Microsoft Word (.docx)' : 'Document'} Pages...
+            </span>
+            <span className="text-xs text-slate-500 mt-1">
+              Preparing high-fidelity layout with tables, headers, and full pagination.
             </span>
           </div>
-        ) : docError ? (
-          /* State 6: Preview Failed — show actual error and retry option */
-          <div className="text-center p-8 max-w-md bg-white rounded-xl shadow-sm border border-rose-200 space-y-3">
-            <AlertCircle className="w-10 h-10 text-rose-500 mx-auto" />
-            <h4 className="font-bold text-sm text-slate-800">Preview Could Not Be Rendered</h4>
-            <p className="text-xs text-rose-600">{docError}</p>
-            <div className="flex items-center justify-center gap-2 pt-2">
-              <button
-                type="button"
-                onClick={() => {
-                  if (isDocx) renderDocxDocument();
-                  else if (isPdf) setZoomLevel((z) => z);
-                }}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-300 rounded-lg text-xs font-bold transition-colors"
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Retry Preview</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleDownload}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-colors"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Download File</span>
-              </button>
+        ) : docError && (!pdfUrl || pdfViewMode === 'continuous') ? (
+          /* State 6: Preview Failed — show actual error and recovery options */
+          <div className="min-h-[500px] flex items-center justify-center p-4">
+            <div className="text-center p-8 max-w-lg bg-white rounded-xl shadow-lg border border-rose-200 space-y-4">
+              <AlertCircle className="w-12 h-12 text-rose-500 mx-auto" />
+              <h4 className="font-bold text-base text-slate-800">Document Reader Notice</h4>
+              <p className="text-xs text-rose-600 leading-relaxed">{docError}</p>
+              <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                {isPdf && pdfUrl && (
+                  <button
+                    type="button"
+                    onClick={() => setPdfViewMode('embed')}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition-colors shadow-sm"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    <span>Open in Native Viewer</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isDocx) renderDocxDocument();
+                    else if (isPdf) setZoomLevel((z) => z);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-colors"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Retry Reader</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={handleDownload}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-colors"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download File</span>
+                </button>
+              </div>
             </div>
           </div>
-        ) : isPdf && pdfUrl ? (
-          /* PDF Viewer: Embedded Native PDF Viewer with Page Navigation & Zoom */
-          <div
-            className="w-full h-full bg-white rounded-lg shadow-sm overflow-hidden flex flex-col"
-            style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
-          >
+        ) : isPdf && pdfDoc && pdfViewMode === 'continuous' ? (
+          /* PDF Viewer Option A: Continuous High-DPI Multi-Page Vertical Scroll */
+          <div className="pdf-document-scroll flex flex-col items-center w-full py-4">
+            {pdfPageNumbers.map((pageNum) => (
+              <PdfPageItem
+                key={`pdf-page-${pageNum}`}
+                pdfDoc={pdfDoc}
+                pageNum={pageNum}
+                zoomLevel={zoomLevel}
+              />
+            ))}
+          </div>
+        ) : isPdf && pdfUrl && pdfViewMode === 'embed' ? (
+          /* PDF Viewer Option B: Full-Height Native Browser Embed (No CSS transform clipping) */
+          <div className="w-full h-full min-h-[750px] bg-slate-900 rounded-lg shadow-xl overflow-hidden">
             <iframe
               src={`${pdfUrl}#toolbar=1&navpanes=1`}
               title={fileName || 'SOP PDF Document'}
-              className="w-full h-full border-none"
+              className="w-full h-full min-h-[750px] border-none"
             />
           </div>
         ) : isDocx ? (
-          /* DOCX Viewer: High Fidelity Layout via docx-preview */
-          <div className="w-full h-full overflow-auto flex justify-center">
+          /* DOCX Viewer: High-Fidelity Word Layout rendered directly into primary scroll canvas */
+          <div className="flex flex-col items-center justify-start w-full py-4">
             <div
               ref={docxContainerRef}
-              className="bg-white shadow-md p-6 max-w-4xl w-full min-h-full rounded-lg docx-preview-container"
-              style={{ transform: `scale(${zoomLevel / 100})`, transformOrigin: 'top center' }}
+              className="docx-preview-container flex flex-col items-center justify-start w-full transition-transform duration-150"
+              style={{
+                zoom: zoomLevel === 100 ? undefined : `${zoomLevel}%`,
+              }}
             />
           </div>
         ) : isImage && imageUrl ? (
           /* Image Viewer with Zoom Controls */
-          <div className="w-full h-full flex items-center justify-center overflow-auto">
+          <div className="flex flex-col items-center justify-center min-h-[600px] py-6">
             <img
               src={imageUrl}
               alt={fileName || 'SOP Document Image'}
-              className="max-w-none transition-transform duration-150 rounded shadow-md object-contain"
+              className="max-w-full rounded-lg shadow-2xl object-contain bg-white p-3 border border-slate-300 transition-all duration-150"
               style={{ width: `${zoomLevel}%` }}
             />
           </div>
         ) : isDoc ? (
           /* Legacy Binary DOC Fallback */
-          <div className="text-center p-8 bg-white rounded-xl shadow-sm border border-slate-200 max-w-md space-y-3">
-            <FileText className="w-12 h-12 text-blue-600 mx-auto" />
-            <h4 className="font-bold text-sm text-slate-800">{fileName}</h4>
-            <p className="text-xs text-slate-500">
-              This document uses the legacy binary <code>.doc</code> format. For real-time in-browser rendering,
-              please save and upload as modern <strong>.docx</strong> or <strong>.pdf</strong>.
-            </p>
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              <span>Download & Open in Microsoft Word</span>
-            </button>
+          <div className="min-h-[500px] flex items-center justify-center p-4">
+            <div className="text-center p-8 bg-white rounded-xl shadow-lg border border-slate-200 max-w-md space-y-3">
+              <FileText className="w-12 h-12 text-blue-600 mx-auto" />
+              <h4 className="font-bold text-sm text-slate-800">{fileName}</h4>
+              <p className="text-xs text-slate-500">
+                This document uses the legacy binary <code>.doc</code> format. For real-time in-browser rendering,
+                please save and upload as modern <strong>.docx</strong> or <strong>.pdf</strong>.
+              </p>
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download & Open in Microsoft Word</span>
+              </button>
+            </div>
           </div>
         ) : isUnsupported ? (
           /* Unsupported Formats (.xlsx, etc.) */
-          <div className="text-center p-8 bg-white rounded-xl shadow-sm border border-slate-200 max-w-md space-y-3">
-            <FileSpreadsheet className="w-12 h-12 text-emerald-600 mx-auto" />
-            <h4 className="font-bold text-sm text-slate-800">{fileName}</h4>
-            <p className="text-xs text-slate-500">
-              In-browser preview is optimized for <strong>PDF</strong>, <strong>DOCX</strong>, and image files.
-              Spreadsheets and tabular attachments can be downloaded and opened in Excel.
-            </p>
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
-            >
-              <Download className="w-4 h-4" />
-              <span>Download Spreadsheet ({formatFileSize(fileSize)})</span>
-            </button>
+          <div className="min-h-[500px] flex items-center justify-center p-4">
+            <div className="text-center p-8 bg-white rounded-xl shadow-lg border border-slate-200 max-w-md space-y-3">
+              <FileSpreadsheet className="w-12 h-12 text-emerald-600 mx-auto" />
+              <h4 className="font-bold text-sm text-slate-800">{fileName}</h4>
+              <p className="text-xs text-slate-500">
+                In-browser preview is optimized for <strong>PDF</strong>, <strong>DOCX</strong>, and image files.
+                Spreadsheets and tabular attachments can be downloaded and opened in Excel.
+              </p>
+              <button
+                type="button"
+                onClick={handleDownload}
+                className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
+              >
+                <Download className="w-4 h-4" />
+                <span>Download Spreadsheet ({formatFileSize(fileSize)})</span>
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="text-center p-8 text-slate-500 text-xs">
+          <div className="min-h-[500px] flex items-center justify-center p-8 text-slate-500 text-xs">
             Preparing document preview...
           </div>
         )}
       </div>
 
-      {/* Electronic Signatures & Verification Certificate Section (Section 6) */}
+      {/* Electronic Signatures & Verification Certificate Section */}
       <div className={`mt-6 pt-5 border-t ${isFullscreen ? 'border-slate-800' : 'border-slate-100'}`}>
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
           <div>
@@ -850,140 +1091,153 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
             </p>
           </div>
 
-          {/* Sign Document Button: Available only on valid persisted versions */}
-          {version?.id && hasDocument && !isUnsavedDraft ? (
+          {/* Action Trigger for Electronic Signature */}
+          {isUnsavedDraft ? (
+            <div className="text-xs font-medium text-amber-700 bg-amber-50 px-3 py-1.5 rounded-lg border border-amber-200 flex items-center gap-1.5">
+              <Lock className="w-3.5 h-3.5 text-amber-600 flex-shrink-0" />
+              <span>Document must be created and saved before electronic signatures can be executed.</span>
+            </div>
+          ) : !hasDocument ? (
+            <div className="text-xs font-medium text-slate-500 bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 flex items-center gap-1.5">
+              <AlertCircle className="w-3.5 h-3.5 text-slate-400 flex-shrink-0" />
+              <span>Attach an official procedure document to enable electronic signature workflows.</span>
+            </div>
+          ) : (
             <button
+              type="button"
               onClick={() => setIsSignModalOpen(true)}
-              className="self-start sm:self-auto inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-lg text-xs font-bold transition-colors shadow-sm"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold shadow-sm transition-colors"
             >
               <PenTool className="w-3.5 h-3.5" />
-              <span>Apply Signature</span>
+              <span>Execute 21 CFR Part 11 Electronic Signature</span>
             </button>
-          ) : (
-            <span className="text-[11px] font-semibold text-slate-400 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200">
-              Signatures Enabled After Draft Creation
-            </span>
           )}
         </div>
 
-        {/* Section 6 Rule: Do not allow signing on unsaved drafts or missing documents */}
-        {isUnsavedDraft || !version?.id ? (
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-xs text-slate-600 space-y-1.5">
-            <div className="font-semibold text-slate-800 flex items-center gap-2">
-              <Lock className="w-4 h-4 text-slate-500" />
-              <span>Electronic Signatures Locked (Pre-Save Draft)</span>
-            </div>
-            <p className="leading-relaxed">
-              Official electronic signatures under 21 CFR Part 11 require an immutable, persisted document version registered in the controlled approval workflow.
-              Once you click <strong>Create Draft Procedure</strong>, this document will be registered with its verified SHA-256 hash and made available for authorized departmental signatures.
-            </p>
-          </div>
-        ) : !hasDocument ? (
-          <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-800 flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-600 flex-shrink-0" />
-            <span>Electronic signing is disabled until an official procedure document is attached to this version.</span>
-          </div>
-        ) : validSignatures.length === 0 ? (
-          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs text-slate-500 space-y-1">
-            <Lock className="w-5 h-5 text-slate-400 mx-auto mb-1 stroke-1" />
-            <p className="font-semibold text-slate-700">No electronic signatures applied yet.</p>
-            <p className="text-[11px] text-slate-400">
-              Authorized authors, department heads, and QC approvers can apply their binding signature above.
-            </p>
+        {/* Active Signatures List */}
+        {validSignatures.length === 0 ? (
+          <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 text-center text-xs text-slate-500">
+            No formal electronic signatures have been affixed to this document version yet.
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {validSignatures.map((sig) => {
-              const isDrawn = sig.signatureMethod === 'DRAWN';
-              return (
-                <div
-                  key={sig.id}
-                  className="bg-white rounded-xl border border-emerald-200/80 shadow-sm p-4 relative overflow-hidden flex flex-col justify-between"
-                >
-                  <div className="absolute -right-3 -bottom-3 text-emerald-100/60 pointer-events-none">
-                    <ShieldCheck className="w-24 h-24 stroke-1" />
-                  </div>
-
-                  <div>
-                    <div className="flex items-center justify-between gap-2 border-b border-slate-100 pb-2 mb-2.5">
-                      <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded bg-blue-50 text-blue-800 border border-blue-200">
-                        {sig.workflowStep === 'AUTHOR_SIGN_OFF'
-                          ? 'Prepared & Authored By'
-                          : sig.workflowStep === 'FINAL_APPROVAL'
-                          ? 'Final Quality Approval'
-                          : 'Reviewed & Approved By'}
-                      </span>
-                      <span className="text-[10px] font-mono font-semibold text-emerald-700 flex items-center gap-1">
-                        <CheckCircle className="w-3 h-3 text-emerald-600" />
-                        <span>VALID</span>
-                      </span>
-                    </div>
-
-                    <div className="py-2 px-1 border-b border-slate-100 mb-2 flex items-center justify-center min-h-[64px] bg-slate-50/50 rounded-lg">
-                      {isDrawn ? (
-                        <img
-                          src={sig.signatureData}
-                          alt={`Signature of ${sig.signerName}`}
-                          className="max-h-14 object-contain"
-                        />
-                      ) : (
-                        <span
-                          className="text-2xl text-slate-900 italic tracking-wide"
-                          style={{
-                            fontFamily:
-                              "'Dancing Script', 'Brush Script MT', 'Great Vibes', 'Caveat', cursive, Georgia, serif",
-                          }}
-                        >
-                          {sig.signatureData}
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {validSignatures.map((sig) => (
+              <div
+                key={sig.id}
+                className="p-3.5 rounded-xl border bg-emerald-50/50 border-emerald-200 shadow-xs flex flex-col justify-between"
+              >
+                <div>
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-xs">
+                        {sig.signerName ? sig.signerName.charAt(0).toUpperCase() : 'U'}
+                      </div>
+                      <div>
+                        <span className="font-bold text-xs text-slate-900 block leading-tight">
+                          {sig.signerName}
                         </span>
-                      )}
-                    </div>
-
-                    <div className="space-y-1 text-xs">
-                      <div className="font-bold text-slate-900">{sig.signerName}</div>
-                      <div className="text-[11px] text-slate-500">
-                        {sig.signerRole} {sig.signerDepartment ? `• ${sig.signerDepartment}` : ''}
-                      </div>
-                      <div className="text-[10px] text-slate-400 flex items-center gap-1">
-                        <Calendar className="w-3 h-3 text-slate-400" />
-                        <span>{format(new Date(sig.signedAt), 'MMM dd, yyyy HH:mm:ss')}</span>
+                        <span className="text-[10px] text-slate-500 block">
+                          {sig.signerRole || 'Authorized Approver'} • {sig.signerDepartment || 'Department'}
+                        </span>
                       </div>
                     </div>
+                    <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 uppercase">
+                      {sig.workflowStep}
+                    </span>
                   </div>
 
-                  <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-400">
-                    <span className="font-mono">ID: {sig.id.slice(0, 8)}...</span>
-                    {isAdmin && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRevokingSignature(sig);
-                          setRevokeReason('');
-                          setRevokeError(null);
-                        }}
-                        className="text-rose-600 hover:text-rose-700 font-semibold"
-                        title="Revoke this electronic signature"
-                      >
-                        Revoke
-                      </button>
-                    )}
+                  <div className="mt-3 pt-2.5 border-t border-emerald-100 text-[11px] space-y-1">
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="flex items-center gap-1">
+                        <Calendar className="w-3 h-3 text-slate-400" />
+                        Signed:
+                      </span>
+                      <span className="font-medium text-slate-700">
+                        {format(new Date(sig.signedAt), 'MMM dd, yyyy HH:mm:ss')}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span className="flex items-center gap-1">
+                        <Lock className="w-3 h-3 text-slate-400" />
+                        Doc Hash:
+                      </span>
+                      <span className="font-mono text-[10px] text-slate-600 truncate max-w-[120px]" title={sig.documentHash}>
+                        {sig.documentHash.slice(0, 8)}...{sig.documentHash.slice(-6)}
+                      </span>
+                    </div>
+
+                    <div className="flex items-center justify-between text-slate-600">
+                      <span>Method:</span>
+                      <span className="text-[10px] font-semibold text-emerald-700">
+                        {sig.signatureMethod === 'DRAWN' ? 'Digital Pen (Drawn)' : 'Electronic (Typed)'}
+                      </span>
+                    </div>
                   </div>
                 </div>
-              );
-            })}
+
+                {/* Revoke Option for Admins or the Original Signer */}
+                {(isAdmin || user?.id === sig.signerUserId) && (
+                  <div className="mt-3 pt-2 border-t border-emerald-100 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRevokingSignature(sig);
+                        setRevokeReason('');
+                        setRevokeError(null);
+                      }}
+                      className="text-[10px] font-bold text-rose-600 hover:text-rose-800 transition-colors"
+                    >
+                      Revoke Signature...
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Historical Revoked Signatures Section (Audit trail preservation) */}
+        {revokedSignatures.length > 0 && (
+          <div className="mt-4 pt-3 border-t border-slate-100">
+            <h4 className="text-xs font-bold text-rose-700 flex items-center gap-1 mb-2">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              <span>Revoked Signatures ({revokedSignatures.length})</span>
+            </h4>
+            <div className="space-y-1.5">
+              {revokedSignatures.map((sig) => (
+                <div
+                  key={sig.id}
+                  className="p-2.5 rounded-lg bg-rose-50/50 border border-rose-200 text-xs text-slate-600 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                >
+                  <div>
+                    <span className="font-bold text-slate-800">{sig.signerName}</span>
+                    <span className="text-slate-500"> ({sig.workflowStep})</span>
+                    <span className="text-rose-600 ml-2 font-medium">
+                      Revoked: {sig.revokedReason || 'No reason specified'}
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-slate-400">
+                    {sig.revokedAt && format(new Date(sig.revokedAt), 'MMM dd, yyyy HH:mm:ss')}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
 
-      {/* Signature Modal */}
-      {version && (
+      {/* 21 CFR Part 11 Electronic Signature Execution Modal */}
+      {version?.id && (
         <SOPElectronicSignatureModal
           isOpen={isSignModalOpen}
           onClose={() => setIsSignModalOpen(false)}
           version={version}
           sopNumber={sopNumber}
-          onSignatureComplete={async (newSig) => {
-            onSignatureAdded?.(newSig);
+          onSignatureComplete={async (sig: SOPElectronicSignature) => {
+            if (onSignatureAdded) {
+              onSignatureAdded(sig);
+            }
             if (onRefresh) {
               await onRefresh();
             }
@@ -991,60 +1245,61 @@ export const SOPDocumentViewer: React.FC<SOPDocumentViewerProps> = ({
         />
       )}
 
-      {/* Admin Revoke Signature Modal */}
-      <Modal
-        isOpen={Boolean(revokingSignature)}
-        onClose={() => setRevokingSignature(null)}
-        title="Revoke Electronic Signature"
-      >
-        <form onSubmit={handleRevokeSubmit} className="space-y-4 text-xs">
-          <div className="p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-lg flex items-start gap-2.5">
-            <AlertTriangle className="w-5 h-5 text-rose-600 flex-shrink-0 mt-0.5" />
+      {/* Revocation Reason Modal */}
+      {revokingSignature && (
+        <Modal
+          isOpen={Boolean(revokingSignature)}
+          onClose={() => setRevokingSignature(null)}
+          title="Revoke Electronic Signature"
+        >
+          <form onSubmit={handleRevokeSubmit} className="space-y-4">
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg text-xs text-amber-800">
+              <p className="font-bold mb-1">Regulatory Impact Notice (21 CFR Part 11):</p>
+              <p>
+                Revoking an electronic signature will invalidate this approval step and record an immutable
+                event in the system audit log. A clear, documented justification is required.
+              </p>
+            </div>
+
+            {revokeError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs text-rose-700">
+                {revokeError}
+              </div>
+            )}
+
             <div>
-              <strong className="block font-bold">Regulatory Audit Notice</strong>
-              Revoking a signature permanently marks this sign-off certificate as REVOKED in the tamper-evident audit trail.
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
+                Reason for Revocation *
+              </label>
+              <textarea
+                value={revokeReason}
+                onChange={(e) => setRevokeReason(e.target.value)}
+                placeholder="State why this signature is being revoked (e.g. substantive procedure amendments, procedural discrepancy)..."
+                rows={3}
+                required
+                className="w-full text-xs p-2.5 border border-slate-300 rounded-lg focus:ring-2 focus:ring-rose-500 focus:outline-none"
+              />
             </div>
-          </div>
 
-          {revokeError && (
-            <div className="p-2.5 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg">
-              {revokeError}
+            <div className="flex justify-end gap-2 pt-2 border-t">
+              <button
+                type="button"
+                onClick={() => setRevokingSignature(null)}
+                className="px-3 py-1.5 border border-slate-300 rounded-lg text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={submittingRevoke || !revokeReason.trim()}
+                className="px-4 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold disabled:opacity-50 transition-colors"
+              >
+                {submittingRevoke ? 'Revoking...' : 'Confirm Revocation'}
+              </button>
             </div>
-          )}
-
-          <div>
-            <label className="block font-semibold text-slate-700 mb-1">
-              Mandatory Reason for Revocation *
-            </label>
-            <textarea
-              required
-              rows={4}
-              value={revokeReason}
-              onChange={(e) => setRevokeReason(e.target.value)}
-              placeholder="e.g. Inadvertent sign-off prior to updated calibration appendix or regulatory changes requested..."
-              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-rose-500 focus:outline-none"
-            />
-          </div>
-
-          <div className="flex justify-end gap-2 pt-2">
-            <button
-              type="button"
-              disabled={submittingRevoke}
-              onClick={() => setRevokingSignature(null)}
-              className="px-4 py-2 border border-slate-300 rounded-lg font-semibold text-slate-700 disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              disabled={submittingRevoke || revokeReason.trim().length < 5}
-              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold shadow-sm disabled:opacity-50"
-            >
-              {submittingRevoke ? 'Revoking...' : 'Confirm Revocation'}
-            </button>
-          </div>
-        </form>
-      </Modal>
+          </form>
+        </Modal>
+      )}
     </div>
   );
 };

@@ -43,25 +43,61 @@
   }
 }
 
-/* DOCX Preview Layout Styles */
-.docx-preview-container .docx-wrapper {
+/* Document Preview & High-Fidelity Reader Styles */
+.docx-preview-container {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+.docx-preview-container .docx-wrapper,
+.docx-preview-container .docx-preview-wrapper {
   background: transparent !important;
   padding: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  width: 100% !important;
 }
-.docx-preview-container .docx-wrapper > section.docx {
+
+.docx-preview-container section.docx,
+.docx-preview-container .docx-wrapper > section.docx,
+.docx-preview-container section.docx-preview,
+.docx-preview-container .docx-preview-wrapper > section.docx-preview {
   background: #ffffff !important;
-  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
-  margin: 0 auto 1.5rem auto !important;
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.15), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
+  margin: 0 auto 2rem auto !important;
   border-radius: 4px !important;
   color: #0f172a !important;
+  overflow: visible !important; /* CRITICAL: prevents clipping of pages, tables, and text */
+  box-sizing: border-box !important;
 }
+
 .docx-preview-container table {
   border-collapse: collapse !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  margin: 1rem 0 !important;
 }
+
 .docx-preview-container table td,
 .docx-preview-container table th {
   border: 1px solid #cbd5e1 !important;
-  padding: 6px 10px !important;
+  padding: 8px 12px !important;
+  vertical-align: top !important;
 }
+
+/* PDF Multi-Page Canvas Rendering */
+.pdf-page-card {
+  background: #ffffff !important;
+  box-shadow: 0 10px 25px -5px rgb(0 0 0 / 0.15), 0 8px 10px -6px rgb(0 0 0 / 0.1) !important;
+  border-radius: 4px !important;
+  overflow: hidden !important;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.pdf-page-card:hover {
+  box-shadow: 0 14px 28px -5px rgb(0 0 0 / 0.2), 0 10px 10px -6px rgb(0 0 0 / 0.12) !important;
+}
+
 
 

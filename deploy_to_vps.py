@@ -141,6 +141,9 @@ def main():
         print("\nChecking for SOPDocumentViewer in container assets (should exist):", flush=True)
         run_ssh_cmd(client, "docker exec nkb_sop_app grep -rn 'SOPDocumentViewer' /app/client/dist | head -n 5")
 
+        print("\nChecking for stageAttachment in container server assets (should exist):", flush=True)
+        run_ssh_cmd(client, "docker exec nkb_sop_app grep -rn 'stageAttachment' /app/server/dist | head -n 5")
+
         print("\nChecking database data integrity in container:", flush=True)
         run_ssh_cmd(client, "docker exec nkb_sop_app sqlite3 /app/data/sop_prod.db 'SELECT count(*) as total_sops FROM sops;'")
         run_ssh_cmd(client, "docker exec nkb_sop_app ls -la /app/uploads")

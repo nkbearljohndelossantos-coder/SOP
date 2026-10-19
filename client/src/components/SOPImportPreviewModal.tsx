@@ -192,11 +192,13 @@ export const SOPImportPreviewModal: React.FC<SOPImportPreviewModalProps> = ({
           if (!isMounted || !docxContainerRef.current) return;
           docxContainerRef.current.innerHTML = '';
           await renderAsync(arrayBuffer, docxContainerRef.current, undefined, {
-            className: 'docx-preview',
-            inWrapper: true,
+            className: 'docx',
+            inWrapper: false,
             ignoreWidth: false,
-            ignoreHeight: false,
+            ignoreHeight: true,
             breakPages: true,
+            renderHeaders: true,
+            renderFooters: true,
           });
         })
         .catch((err) => {
