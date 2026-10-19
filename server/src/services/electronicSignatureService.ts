@@ -111,6 +111,18 @@ export async function signDocumentVersion(
       .digest('hex');
   }
 
+  // Verify document integrity against any existing valid signatures
+  if (version.signatures.length > 0) {
+    const mismatchedSig = version.signatures.find(
+      (s) => s.documentHash && s.documentHash !== actualDocumentHash
+    );
+    if (mismatchedSig) {
+      throw new Error(
+        'Document tampering detected: the document file hash has changed since previous valid electronic signatures were affixed.'
+      );
+    }
+  }
+
   // 5. Determine signing department and role
   const targetDeptId =
     input.departmentId ||

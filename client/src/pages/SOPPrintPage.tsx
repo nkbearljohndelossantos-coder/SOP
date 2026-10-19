@@ -104,51 +104,88 @@ export const SOPPrintPage: React.FC = () => {
         </tbody>
       </table>
 
+      {/* Official Attached Document Banner */}
+      {version.attachments && version.attachments.length > 0 && (
+        <div className="p-3 border-2 border-black bg-gray-50 rounded mb-4 text-xs">
+          <div className="font-bold uppercase tracking-wider text-[11px] text-gray-800">
+            Official Controlled Document Attachment
+          </div>
+          <div className="font-semibold text-sm mt-0.5">
+            {version.attachments[0].originalFilename || version.attachments[0].fileName}
+          </div>
+          {version.documentHash && (
+            <div className="font-mono text-[9px] text-gray-600 mt-1">
+              Document SHA-256 Checksum: {version.documentHash}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Document Sections */}
       <div className="space-y-6 text-xs leading-relaxed">
-        <section>
-          <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
-            1. Purpose
-          </h2>
-          <p className="whitespace-pre-line text-justify">{version.purpose}</p>
-        </section>
+        {version.purpose || version.procedure || version.scope ? (
+          <>
+            {version.purpose && (
+              <section>
+                <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
+                  1. Purpose
+                </h2>
+                <p className="whitespace-pre-line text-justify">{version.purpose}</p>
+              </section>
+            )}
 
-        <section>
-          <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
-            2. Scope
-          </h2>
-          <p className="whitespace-pre-line text-justify">{version.scope}</p>
-        </section>
+            {version.scope && (
+              <section>
+                <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
+                  2. Scope
+                </h2>
+                <p className="whitespace-pre-line text-justify">{version.scope}</p>
+              </section>
+            )}
 
-        <section>
-          <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
-            3. Responsibilities
-          </h2>
-          <p className="whitespace-pre-line text-justify">{version.responsibilities}</p>
-        </section>
+            {version.responsibilities && (
+              <section>
+                <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
+                  3. Responsibilities
+                </h2>
+                <p className="whitespace-pre-line text-justify">{version.responsibilities}</p>
+              </section>
+            )}
 
-        <section>
-          <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
-            4. Step-by-Step Procedure
-          </h2>
-          <div className="whitespace-pre-line font-mono text-[11px] leading-relaxed p-3 border border-gray-300 bg-gray-50 rounded">
-            {version.procedure}
+            {version.procedure && (
+              <section>
+                <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
+                  4. Step-by-Step Procedure
+                </h2>
+                <div className="whitespace-pre-line font-mono text-[11px] leading-relaxed p-3 border border-gray-300 bg-gray-50 rounded">
+                  {version.procedure}
+                </div>
+              </section>
+            )}
+
+            {version.relatedForms && (
+              <section>
+                <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
+                  5. Related Forms & Records
+                </h2>
+                <p className="whitespace-pre-line">{version.relatedForms}</p>
+              </section>
+            )}
+
+            {version.references && (
+              <section>
+                <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
+                  6. References & Applicable Regulatory Standards
+                </h2>
+                <p className="whitespace-pre-line">{version.references}</p>
+              </section>
+            )}
+          </>
+        ) : (
+          <div className="p-4 border border-dashed border-gray-400 bg-gray-50/50 rounded text-center text-xs text-gray-600 italic">
+            Procedural instructions and operational controls are maintained in the official controlled document file verified above.
           </div>
-        </section>
-
-        <section>
-          <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
-            5. Related Forms & Records
-          </h2>
-          <p className="whitespace-pre-line">{version.relatedForms || 'None.'}</p>
-        </section>
-
-        <section>
-          <h2 className="font-bold uppercase tracking-wider text-sm border-b-2 border-black pb-1 mb-2">
-            6. References & Applicable Regulatory Standards
-          </h2>
-          <p className="whitespace-pre-line">{version.references || 'None.'}</p>
-        </section>
+        )}
 
         {/* Formal Department Sign-Offs & Signatures */}
         <section className="pt-4 page-break-inside-avoid">
@@ -217,6 +254,47 @@ export const SOPPrintPage: React.FC = () => {
                 })}
             </tbody>
           </table>
+
+          {/* Electronic Signatures Block */}
+          {version.signatures && version.signatures.filter((s) => s.status === 'VALID').length > 0 && (
+            <div className="mt-4 pt-3 border-t border-gray-300">
+              <h3 className="font-bold uppercase tracking-wider text-xs mb-2">
+                21 CFR Part 11 Electronic Signatures & Verification Records
+              </h3>
+              <div className="grid grid-cols-2 gap-3">
+                {version.signatures
+                  .filter((s) => s.status === 'VALID')
+                  .map((sig) => (
+                    <div key={sig.id} className="p-2.5 border border-black rounded text-[10px] space-y-1 bg-white">
+                      <div className="font-bold uppercase text-[9px] text-gray-700">
+                        {sig.workflowStep === 'AUTHOR_SIGN_OFF'
+                          ? 'Prepared & Authored By'
+                          : sig.workflowStep === 'FINAL_APPROVAL'
+                          ? 'Final Quality Approval'
+                          : 'Reviewed & Approved By'}
+                      </div>
+                      <div className="py-1 min-h-[36px] flex items-center justify-center border-y border-gray-200">
+                        {sig.signatureMethod === 'DRAWN' ? (
+                          <img src={sig.signatureData} alt={sig.signerName} className="max-h-10 object-contain" />
+                        ) : (
+                          <span
+                            className="text-lg italic"
+                            style={{ fontFamily: "'Dancing Script', 'Brush Script MT', cursive, Georgia, serif" }}
+                          >
+                            {sig.signatureData}
+                          </span>
+                        )}
+                      </div>
+                      <div className="font-bold">{sig.signerName}</div>
+                      <div className="text-gray-600">{sig.signerRole} {sig.signerDepartment ? `(${sig.signerDepartment})` : ''}</div>
+                      <div className="text-gray-500 font-mono text-[8px]">
+                        Signed: {format(new Date(sig.signedAt), 'yyyy-MM-dd HH:mm:ss')} • ID: {sig.id.slice(0, 8)}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
         </section>
 
         {/* Revision Log */}

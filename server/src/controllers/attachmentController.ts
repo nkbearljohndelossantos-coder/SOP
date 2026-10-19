@@ -117,7 +117,14 @@ export async function uploadAttachment(req: Request, res: Response) {
     return res.status(400).json({ success: false, message: 'No file uploaded.' });
   }
 
-  const version = await prisma.sOPVersion.findUnique({ where: { id: versionId } });
+  const version = await prisma.sOPVersion.findUnique({
+    where: { id: versionId },
+    include: {
+      signatures: {
+        where: { status: 'VALID' },
+      },
+    },
+  });
   if (!version) {
     fs.unlinkSync(req.file.path);
     return res.status(404).json({ success: false, message: 'SOP version not found.' });
@@ -126,6 +133,14 @@ export async function uploadAttachment(req: Request, res: Response) {
   if (version.isFinalized) {
     fs.unlinkSync(req.file.path);
     return res.status(400).json({ success: false, message: 'Cannot add attachments to finalized SOP.' });
+  }
+
+  if (version.signatures.length > 0) {
+    fs.unlinkSync(req.file.path);
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot upload or replace documents on an electronically signed SOP version. Revoke existing signatures first or initiate a new revision.',
+    });
   }
 
   const fileHash = computeFileHash(req.file.path);
@@ -226,7 +241,15 @@ export async function deleteAttachment(req: Request, res: Response) {
 
   const attachment = await prisma.sOPAttachment.findUnique({
     where: { id },
-    include: { sopVersion: true },
+    include: {
+      sopVersion: {
+        include: {
+          signatures: {
+            where: { status: 'VALID' },
+          },
+        },
+      },
+    },
   });
 
   if (!attachment) {
@@ -235,6 +258,13 @@ export async function deleteAttachment(req: Request, res: Response) {
 
   if (attachment.sopVersion.isFinalized) {
     return res.status(400).json({ success: false, message: 'Cannot delete attachments from a finalized SOP.' });
+  }
+
+  if (attachment.sopVersion.signatures.length > 0) {
+    return res.status(400).json({
+      success: false,
+      message: 'Cannot delete document attachments from an electronically signed SOP version. Revoke existing signatures first or initiate a new revision.',
+    });
   }
 
   const filePath = path.join(uploadDir, attachment.storedFilename);

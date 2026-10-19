@@ -1,5 +1,6 @@
 import request from 'supertest';
 import { beforeAll, describe, expect, it } from 'vitest';
+import bcrypt from 'bcryptjs';
 import app from '../src/app';
 import { prisma } from '../src/prisma/client';
 import { seedProductionData } from '../src/prisma/seedProd';
@@ -16,31 +17,33 @@ describe('SOP Electronic Signature Workflow & Audit Tests', () => {
   beforeAll(async () => {
     await seedProductionData();
 
+    const testPasswordHash = await bcrypt.hash('password123', 10);
+
     // 1. Create test users
     const adminUser = await prisma.user.upsert({
       where: { email: 'admin.sig@nkb.com' },
-      update: {},
+      update: { passwordHash: testPasswordHash },
       create: {
         employeeId: 'EMP-ADM-SIG',
         username: 'admin_sig',
         email: 'admin.sig@nkb.com',
         fullName: 'Admin Signature Tester',
         role: 'ADMIN',
-        passwordHash: '$2a$10$wT0vVf9/m3oQf/cW7Z2H.eqR2W2zU2o3a1n5m6k7l8j9h0g1f2e3d', // password123
+        passwordHash: testPasswordHash,
         isActive: true,
       },
     });
 
     const creatorUser = await prisma.user.upsert({
       where: { email: 'creator.sig@nkb.com' },
-      update: {},
+      update: { passwordHash: testPasswordHash },
       create: {
         employeeId: 'EMP-CRE-SIG',
         username: 'creator_sig',
         email: 'creator.sig@nkb.com',
         fullName: 'Author Signature Tester',
         role: 'SOP_CREATOR',
-        passwordHash: '$2a$10$wT0vVf9/m3oQf/cW7Z2H.eqR2W2zU2o3a1n5m6k7l8j9h0g1f2e3d', // password123
+        passwordHash: testPasswordHash,
         isActive: true,
       },
     });
@@ -51,7 +54,7 @@ describe('SOP Electronic Signature Workflow & Audit Tests', () => {
 
     const qcHeadUser = await prisma.user.upsert({
       where: { email: 'qchead.sig@nkb.com' },
-      update: {},
+      update: { passwordHash: testPasswordHash },
       create: {
         employeeId: 'EMP-QCH-SIG',
         username: 'qchead_sig',
@@ -60,7 +63,7 @@ describe('SOP Electronic Signature Workflow & Audit Tests', () => {
         position: 'Quality Assurance & QC Director',
         role: 'DEPARTMENT_HEAD',
         departmentId: qcDeptId,
-        passwordHash: '$2a$10$wT0vVf9/m3oQf/cW7Z2H.eqR2W2zU2o3a1n5m6k7l8j9h0g1f2e3d', // password123
+        passwordHash: testPasswordHash,
         isActive: true,
       },
     });
@@ -204,5 +207,99 @@ describe('SOP Electronic Signature Workflow & Audit Tests', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.data.status).toBe('REVOKED');
     expect(res.body.data.revokedReason).toBe('Revision requested by regulatory audit team; new signature required.');
+  });
+
+  it('6. Re-authentication password rejects invalid credentials with 400/500', async () => {
+    const res = await request(app)
+      .post(`/api/workflow/versions/${versionId}/sign`)
+      .set('Authorization', `Bearer ${qcHeadToken}`)
+      .send({
+        signatureMethod: 'TYPED',
+        signatureData: 'Dr. Roberto Mendoza',
+        declarationText: 'Re-signing after revocation with password check.',
+        password: 'wrong_password_123',
+        departmentId: qcDeptId,
+        workflowStep: 'DEPARTMENT_APPROVAL',
+      });
+
+    expect([400, 500]).toContain(res.status);
+    expect(res.body.message).toContain('Incorrect account password');
+  });
+
+  it('7. Unauthorized user cannot sign on behalf of an unrelated department', async () => {
+    // Create an unprivileged user
+    const unprivUser = await prisma.user.upsert({
+      where: { email: 'viewer.sig@nkb.com' },
+      update: {},
+      create: {
+        employeeId: 'EMP-VIEW-SIG',
+        username: 'viewer_sig',
+        email: 'viewer.sig@nkb.com',
+        fullName: 'Unprivileged Viewer',
+        role: 'VIEWER',
+        passwordHash: '$2a$10$wT0vVf9/m3oQf/cW7Z2H.eqR2W2zU2o3a1n5m6k7l8j9h0g1f2e3d',
+        isActive: true,
+      },
+    });
+
+    const jwt = await import('jsonwebtoken');
+    const { env } = await import('../src/config/env');
+    const unprivToken = jwt.default.sign(
+      { userId: unprivUser.id, username: unprivUser.username, role: unprivUser.role },
+      env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+
+    const res = await request(app)
+      .post(`/api/workflow/versions/${versionId}/sign`)
+      .set('Authorization', `Bearer ${unprivToken}`)
+      .send({
+        signatureMethod: 'TYPED',
+        signatureData: 'Unprivileged Viewer',
+        declarationText: 'Attempting unauthorized signature.',
+        departmentId: qcDeptId,
+        workflowStep: 'DEPARTMENT_APPROVAL',
+      });
+
+    expect([400, 403, 500]).toContain(res.status);
+    expect(res.body.message).toContain('not authorized');
+  });
+
+  it('8. Tamper prevention: Blocks uploading attachments when valid electronic signatures exist', async () => {
+    // Re-sign with valid password as QC head so valid signature exists
+    await request(app)
+      .post(`/api/workflow/versions/${versionId}/sign`)
+      .set('Authorization', `Bearer ${qcHeadToken}`)
+      .send({
+        signatureMethod: 'TYPED',
+        signatureData: 'Dr. Roberto Mendoza',
+        declarationText: 'Re-signed and officially approved with valid credentials.',
+        password: 'password123',
+        departmentId: qcDeptId,
+        workflowStep: 'DEPARTMENT_APPROVAL',
+      });
+
+    // Attempting to upload/replace attachment on this signed version
+    const res = await request(app)
+      .post(`/api/attachments/versions/${versionId}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .attach('file', Buffer.from('Tampered content file'), 'tampered.docx');
+
+    expect(res.status).toBe(400);
+    expect(res.body.message).toContain('Cannot upload or replace documents on an electronically signed SOP version');
+  });
+
+  it('9. Append-only Audit trail verifies signature creation and revocation events', async () => {
+    const auditLogs = await prisma.auditLog.findMany({
+      where: {
+        entity: 'SOPElectronicSignature',
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    expect(auditLogs.length).toBeGreaterThanOrEqual(2);
+    const actions = auditLogs.map((a) => a.action);
+    expect(actions).toContain('SOP_ELECTRONIC_SIGNATURE_CREATED');
+    expect(actions).toContain('SOP_ELECTRONIC_SIGNATURE_REVOKED');
   });
 });
