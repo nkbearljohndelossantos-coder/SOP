@@ -32,6 +32,7 @@ export interface PdfAnnotation {
   y: number;
   text: string;
   fontSize?: number;
+  type?: 'text' | 'date';
 }
 
 interface SOPElectronicSignatureModalProps {
@@ -44,6 +45,8 @@ interface SOPElectronicSignatureModalProps {
   targetDepartmentId?: string;
   placement?: PdfSignaturePlacement | null;
   annotations?: PdfAnnotation[] | null;
+  initialMethod?: 'DRAWN' | 'TYPED';
+  initialSignatureData?: string;
 }
 
 export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalProps> = ({
@@ -56,11 +59,17 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
   targetDepartmentId,
   placement,
   annotations,
+  initialMethod,
+  initialSignatureData,
 }) => {
   const { user, isAdmin } = useAuth();
 
-  const [activeMethod, setActiveMethod] = useState<'DRAWN' | 'TYPED'>('DRAWN');
-  const [typedName, setTypedName] = useState(user?.fullName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim());
+  const [activeMethod, setActiveMethod] = useState<'DRAWN' | 'TYPED'>(initialMethod || 'DRAWN');
+  const [typedName, setTypedName] = useState(
+    initialMethod === 'TYPED' && initialSignatureData
+      ? initialSignatureData
+      : (user?.fullName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim())
+  );
   const [password, setPassword] = useState('');
   const [workflowStep, setWorkflowStep] = useState(defaultWorkflowStep || 'DEPARTMENT_APPROVAL');
   const [selectedDeptId, setSelectedDeptId] = useState(targetDepartmentId || user?.departmentId || '');
@@ -77,7 +86,14 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
   // Update defaults when modal opens
   useEffect(() => {
     if (isOpen) {
-      setTypedName(user?.fullName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim());
+      if (initialMethod) {
+        setActiveMethod(initialMethod);
+      }
+      if (initialMethod === 'TYPED' && initialSignatureData) {
+        setTypedName(initialSignatureData);
+      } else {
+        setTypedName(user?.fullName || `${user?.firstName || ''} ${user?.lastName || ''}`.trim());
+      }
       setPassword('');
       setAgreedToLegalDeclaration(false);
       setError(null);
@@ -89,7 +105,7 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
       }
       setTimeout(() => initCanvas(), 50);
     }
-  }, [isOpen, defaultWorkflowStep, targetDepartmentId, user]);
+  }, [isOpen, defaultWorkflowStep, targetDepartmentId, user, initialMethod, initialSignatureData]);
 
   const initCanvas = () => {
     const canvas = canvasRef.current;
@@ -112,6 +128,16 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
     ctx.clearRect(0, 0, rect.width, rect.height);
     setHasDrawnContent(false);
     strokeHistoryRef.current = [];
+
+    // If pre-drawn signature is provided, draw it onto the canvas
+    if (initialMethod === 'DRAWN' && initialSignatureData && initialSignatureData.startsWith('data:image/')) {
+      const img = new Image();
+      img.onload = () => {
+        ctx.drawImage(img, 0, 0, rect.width, rect.height);
+        setHasDrawnContent(true);
+      };
+      img.src = initialSignatureData;
+    }
   };
 
   const getCanvasCoordinates = (e: React.MouseEvent<HTMLCanvasElement> | React.TouchEvent<HTMLCanvasElement>) => {
@@ -195,8 +221,13 @@ export const SOPElectronicSignatureModal: React.FC<SOPElectronicSignatureModalPr
   const getSignatureDataUrl = (): string | null => {
     if (activeMethod === 'DRAWN') {
       const canvas = canvasRef.current;
-      if (!canvas || !hasDrawnContent) return null;
-      return canvas.toDataURL('image/png');
+      if (canvas && hasDrawnContent) {
+        return canvas.toDataURL('image/png');
+      }
+      if (initialMethod === 'DRAWN' && initialSignatureData) {
+        return initialSignatureData;
+      }
+      return null;
     } else {
       const trimmed = typedName.trim();
       return trimmed.length >= 2 ? trimmed : null;

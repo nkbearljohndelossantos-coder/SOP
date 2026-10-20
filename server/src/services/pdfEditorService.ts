@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { PDFDocument, rgb, StandardFonts } from 'pdf-lib';
+import { PDFDocument, rgb, StandardFonts, degrees } from 'pdf-lib';
 
 export interface SignaturePlacement {
   pageNumber: number; // 1-indexed
@@ -28,8 +28,74 @@ export interface SignerEmbedInfo {
 }
 
 /**
+ * Calculates PDF coordinates and rotation angle taking into account page dimensions and rotation (/Rotate attribute).
+ */
+function mapBoxCoordinates(
+  page: any,
+  rel: { x: number; y: number; width: number; height: number }
+) {
+  const { width: pWidth, height: pHeight } = page.getSize();
+  const rotation = ((page.getRotation()?.angle || 0) % 360 + 360) % 360;
+
+  if (rotation === 90) {
+    // Rotated 90 deg clockwise in viewer (width is pHeight, height is pWidth)
+    const boxW = Math.max(120, Math.min(pHeight - 20, rel.width * pHeight));
+    const boxH = Math.max(45, Math.min(pWidth - 20, rel.height * pWidth));
+    const boxX = Math.max(10, Math.min(pWidth - boxH - 10, rel.y * pWidth));
+    const boxY = Math.max(10, Math.min(pHeight - boxW - 10, pHeight - (rel.x * pHeight) - boxW));
+    return { x: boxX, y: boxY, width: boxH, height: boxW, rotationAngle: 90 };
+  } else if (rotation === 180) {
+    const boxW = Math.max(120, Math.min(pWidth - 20, rel.width * pWidth));
+    const boxH = Math.max(45, Math.min(pHeight - 20, rel.height * pHeight));
+    const boxX = Math.max(10, Math.min(pWidth - boxW - 10, pWidth - (rel.x * pWidth) - boxW));
+    const boxY = Math.max(10, Math.min(pHeight - boxH - 10, rel.y * pHeight));
+    return { x: boxX, y: boxY, width: boxW, height: boxH, rotationAngle: 180 };
+  } else if (rotation === 270) {
+    const boxW = Math.max(120, Math.min(pHeight - 20, rel.width * pHeight));
+    const boxH = Math.max(45, Math.min(pWidth - 20, rel.height * pWidth));
+    const boxX = Math.max(10, Math.min(pWidth - boxH - 10, pWidth - (rel.y * pWidth) - boxH));
+    const boxY = Math.max(10, Math.min(pHeight - boxW - 10, rel.x * pHeight));
+    return { x: boxX, y: boxY, width: boxH, height: boxW, rotationAngle: 270 };
+  }
+
+  // Standard orientation (rotation === 0)
+  const boxW = Math.max(130, Math.min(pWidth - 20, rel.width * pWidth));
+  const boxH = Math.max(50, Math.min(pHeight - 20, rel.height * pHeight));
+  const boxX = Math.max(10, Math.min(pWidth - boxW - 10, rel.x * pWidth));
+  const boxY = Math.max(10, Math.min(pHeight - boxH - 10, pHeight - (rel.y * pHeight) - boxH));
+  return { x: boxX, y: boxY, width: boxW, height: boxH, rotationAngle: 0 };
+}
+
+function mapAnnotationCoordinates(
+  page: any,
+  ann: { x: number; y: number; fontSize?: number }
+) {
+  const { width: pWidth, height: pHeight } = page.getSize();
+  const rotation = ((page.getRotation()?.angle || 0) % 360 + 360) % 360;
+  const fSize = ann.fontSize || 10;
+
+  if (rotation === 90) {
+    const ax = Math.max(5, Math.min(pWidth - 10, (ann.y || 0.1) * pWidth));
+    const ay = Math.max(5, Math.min(pHeight - 10, pHeight - ((ann.x || 0.1) * pHeight) - fSize));
+    return { x: ax, y: ay, rotationAngle: 90 };
+  } else if (rotation === 180) {
+    const ax = Math.max(5, Math.min(pWidth - 10, pWidth - ((ann.x || 0.1) * pWidth)));
+    const ay = Math.max(5, Math.min(pHeight - 10, (ann.y || 0.1) * pHeight));
+    return { x: ax, y: ay, rotationAngle: 180 };
+  } else if (rotation === 270) {
+    const ax = Math.max(5, Math.min(pWidth - 10, pWidth - ((ann.y || 0.1) * pWidth) - fSize));
+    const ay = Math.max(5, Math.min(pHeight - 10, (ann.x || 0.1) * pHeight));
+    return { x: ax, y: ay, rotationAngle: 270 };
+  }
+
+  const ax = Math.max(5, Math.min(pWidth - 10, (ann.x || 0.1) * pWidth));
+  const ay = Math.max(5, Math.min(pHeight - 10, pHeight - ((ann.y || 0.1) * pHeight) - fSize));
+  return { x: ax, y: ay, rotationAngle: 0 };
+}
+
+/**
  * Embeds a confirmed electronic signature and optional annotations directly into PDF file bytes.
- * Handles coordinate translation from browser DOM (top-left) to PDF points (bottom-left).
+ * Handles coordinate translation from browser DOM (top-left) to PDF points (bottom-left) and page rotation.
  */
 export async function embedSignatureIntoPdf(
   pdfBuffer: Buffer,
@@ -58,14 +124,13 @@ export async function embedSignatureIntoPdf(
     : pageCount;
 
   const page = pages[targetPageNum - 1];
-  const { width: pWidth, height: pHeight } = page.getSize();
 
   // Load standard fonts
   const fontRegular = await pdfDoc.embedFont(StandardFonts.Helvetica);
   const fontBold = await pdfDoc.embedFont(StandardFonts.HelveticaBold);
   const fontScript = await pdfDoc.embedFont(StandardFonts.TimesRomanBoldItalic);
 
-  // Normalize placement: default to bottom-right signature block if placement not provided
+  // Normalize placement
   const normRel: SignaturePlacement = {
     pageNumber: targetPageNum,
     x: placement?.x !== undefined ? Math.max(0.01, Math.min(0.85, placement.x)) : 0.55,
@@ -74,18 +139,14 @@ export async function embedSignatureIntoPdf(
     height: placement?.height !== undefined ? Math.max(0.06, Math.min(0.25, placement.height)) : 0.12,
   };
 
-  const boxW = Math.max(130, Math.min(pWidth - 20, normRel.width * pWidth));
-  const boxH = Math.max(50, Math.min(pHeight - 20, normRel.height * pHeight));
-  const boxX = Math.max(10, Math.min(pWidth - boxW - 10, normRel.x * pWidth));
-  // Convert DOM top-left Y to PDF bottom-left Y
-  const boxY = Math.max(10, Math.min(pHeight - boxH - 10, pHeight - (normRel.y * pHeight) - boxH));
+  const coords = mapBoxCoordinates(page, normRel);
 
   // 1. Draw Signature Card Container
   page.drawRectangle({
-    x: boxX,
-    y: boxY,
-    width: boxW,
-    height: boxH,
+    x: coords.x,
+    y: coords.y,
+    width: coords.width,
+    height: coords.height,
     color: rgb(0.98, 0.99, 1),
     borderColor: rgb(0.15, 0.35, 0.75),
     borderWidth: 1.5,
@@ -98,13 +159,13 @@ export async function embedSignatureIntoPdf(
       const imgBuffer = Buffer.from(base64Data, 'base64');
       const pngImg = await pdfDoc.embedPng(imgBuffer);
 
-      const maxImgW = Math.max(40, boxW - 16);
-      const maxImgH = Math.max(25, boxH - 28);
+      const maxImgW = Math.max(40, coords.width - 16);
+      const maxImgH = Math.max(25, coords.height - 28);
       const imgDims = pngImg.scaleToFit(maxImgW, maxImgH);
 
       // Center the image inside the upper portion of the box
-      const imgX = boxX + (boxW - imgDims.width) / 2;
-      const imgY = boxY + 24 + (maxImgH - imgDims.height) / 2;
+      const imgX = coords.x + (coords.width - imgDims.width) / 2;
+      const imgY = coords.y + 24 + (maxImgH - imgDims.height) / 2;
 
       page.drawImage(pngImg, {
         x: imgX,
@@ -115,9 +176,9 @@ export async function embedSignatureIntoPdf(
     } catch (imgErr) {
       console.warn('Failed to embed drawn signature image, falling back to vector text:', imgErr);
       page.drawText(signerInfo.name, {
-        x: boxX + 10,
-        y: boxY + Math.max(24, boxH * 0.45),
-        size: Math.min(18, Math.max(12, boxH * 0.28)),
+        x: coords.x + 10,
+        y: coords.y + Math.max(24, coords.height * 0.45),
+        size: Math.min(18, Math.max(12, coords.height * 0.28)),
         font: fontScript,
         color: rgb(0.05, 0.15, 0.45),
       });
@@ -126,9 +187,9 @@ export async function embedSignatureIntoPdf(
     // Typed Signature
     const cleanTypedName = signatureData.startsWith('data:') ? signerInfo.name : signatureData;
     page.drawText(cleanTypedName, {
-      x: boxX + 12,
-      y: boxY + Math.max(26, boxH * 0.45),
-      size: Math.min(18, Math.max(12, boxH * 0.28)),
+      x: coords.x + 12,
+      y: coords.y + Math.max(26, coords.height * 0.45),
+      size: Math.min(18, Math.max(12, coords.height * 0.28)),
       font: fontScript,
       color: rgb(0.05, 0.15, 0.45),
     });
@@ -140,17 +201,17 @@ export async function embedSignatureIntoPdf(
   const metaLine = `${signerInfo.department || 'Authorized Dept'} • ${signerInfo.date.toISOString().replace('T', ' ').slice(0, 19)} UTC • SHA: ${hashShort}`;
 
   page.drawText(titleLine, {
-    x: boxX + 8,
-    y: boxY + 12,
-    size: Math.min(7, Math.max(5.5, boxW * 0.035)),
+    x: coords.x + 8,
+    y: coords.y + 12,
+    size: Math.min(7, Math.max(5.5, coords.width * 0.035)),
     font: fontBold,
     color: rgb(0.1, 0.15, 0.3),
   });
 
   page.drawText(metaLine, {
-    x: boxX + 8,
-    y: boxY + 4,
-    size: Math.min(6, Math.max(4.5, boxW * 0.03)),
+    x: coords.x + 8,
+    y: coords.y + 4,
+    size: Math.min(6, Math.max(4.5, coords.width * 0.03)),
     font: fontRegular,
     color: rgb(0.35, 0.4, 0.5),
   });
@@ -161,16 +222,12 @@ export async function embedSignatureIntoPdf(
       if (!ann.text || !ann.text.trim()) continue;
       const aPageNum = Math.max(1, Math.min(ann.pageNumber || 1, pageCount));
       const aPage = pages[aPageNum - 1];
-      const { width: apWidth, height: apHeight } = aPage.getSize();
-
-      const fSize = ann.fontSize || 10;
-      const ax = Math.max(5, Math.min(apWidth - 10, (ann.x || 0.1) * apWidth));
-      const ay = Math.max(5, Math.min(apHeight - 10, apHeight - ((ann.y || 0.1) * apHeight) - fSize));
+      const aCoords = mapAnnotationCoordinates(aPage, ann);
 
       aPage.drawText(ann.text, {
-        x: ax,
-        y: ay,
-        size: fSize,
+        x: aCoords.x,
+        y: aCoords.y,
+        size: ann.fontSize || 10,
         font: fontBold,
         color: ann.type === 'date' ? rgb(0.2, 0.3, 0.5) : rgb(0.1, 0.1, 0.1),
       });
@@ -214,17 +271,13 @@ export async function embedAnnotationsIntoPdf(
   for (const ann of annotations) {
     if (!ann.text || !ann.text.trim()) continue;
     const aPageNum = Math.max(1, Math.min(ann.pageNumber || 1, pageCount));
-    const page = pages[aPageNum - 1];
-    const { width: apWidth, height: apHeight } = page.getSize();
+    const aPage = pages[aPageNum - 1];
+    const aCoords = mapAnnotationCoordinates(aPage, ann);
 
-    const fSize = ann.fontSize || 10;
-    const ax = Math.max(5, Math.min(apWidth - 10, (ann.x || 0.1) * apWidth));
-    const ay = Math.max(5, Math.min(apHeight - 10, apHeight - ((ann.y || 0.1) * apHeight) - fSize));
-
-    page.drawText(ann.text, {
-      x: ax,
-      y: ay,
-      size: fSize,
+    aPage.drawText(ann.text, {
+      x: aCoords.x,
+      y: aCoords.y,
+      size: ann.fontSize || 10,
       font: fontBold,
       color: ann.type === 'date' ? rgb(0.2, 0.3, 0.5) : rgb(0.1, 0.1, 0.1),
     });
